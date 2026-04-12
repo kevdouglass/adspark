@@ -14,12 +14,14 @@
  * of throw-based so the provider's orchestration code doesn't have to
  * classify exceptions at runtime — the client classifies once, here.
  *
- * WHY `AbortSignal.timeout(55_000)`:
+ * WHY `AbortSignal.timeout(CLIENT_REQUEST_TIMEOUT_MS)`:
  *
- * Vercel's serverless functions have a 60-second execution ceiling. The
- * client timeout is 55s so the client-side timeout fires BEFORE the
- * server hits its hard wall — this gives us a cleaner `CLIENT_TIMEOUT`
- * error than whatever garbage a killed serverless function returns.
+ * This client is the MIDDLE layer in the three-layer timeout stagger
+ * (pipeline 50s < client 55s < Vercel 60s). The value itself — and the
+ * reasoning for the stagger — lives in `lib/api/timeouts.ts`, which is
+ * the single source of truth. Never hard-code 55_000 here; any change
+ * to the budget belongs in `timeouts.ts` so the invariant test there
+ * catches a mis-ordering.
  *
  * WHY no Zod validation on the response:
  *
@@ -50,6 +52,7 @@ import type {
   GenerateRequestBody,
   GenerateSuccessResponseBody,
 } from "./types";
+import { CLIENT_REQUEST_TIMEOUT_MS } from "./timeouts";
 import { KNOWN_API_ERROR_CODES, type ApiError } from "./errors";
 import type {
   GenerateFn,
@@ -62,11 +65,13 @@ import type { PipelineStage } from "@/lib/pipeline/types";
 // ---------------------------------------------------------------------------
 
 /**
- * Default request timeout in milliseconds. 55s leaves a 5s buffer below
- * Vercel's 60s serverless hard limit so our client-side timeout fires
- * BEFORE the server gets killed — cleaner error than a 504 from Vercel.
+ * Default request timeout in milliseconds. Re-exported alias for
+ * `CLIENT_REQUEST_TIMEOUT_MS` so callers of this module don't need
+ * to reach into `./timeouts` directly. The value is owned by
+ * `lib/api/timeouts.ts` — see that file for the stagger rationale
+ * (pipeline 50s < client 55s < Vercel 60s).
  */
-export const DEFAULT_GENERATE_TIMEOUT_MS = 55_000;
+export const DEFAULT_GENERATE_TIMEOUT_MS = CLIENT_REQUEST_TIMEOUT_MS;
 
 /**
  * Generic message shown when the fetch itself fails (DNS failure,
