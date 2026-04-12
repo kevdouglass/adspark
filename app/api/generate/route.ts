@@ -42,6 +42,7 @@ import {
   sanitizeErrorMessage,
   MAX_REQUEST_BODY_BYTES,
 } from "@/lib/api/errors";
+import type { GenerateSuccessResponse } from "@/lib/api/types";
 
 /**
  * Read a Request body with a hard byte limit enforced at the stream level.
@@ -209,14 +210,16 @@ export async function POST(request: Request): Promise<Response> {
 
     // If the pipeline produced creatives, return 200 even with partial errors.
     // Partial failure is a successful response with error details — not an HTTP error.
+    //
+    // `satisfies GenerateSuccessResponse` gives us compile-time proof that the
+    // wire format matches the public contract in lib/api/types.ts — any field
+    // drift between the pipeline and the contract is caught at build time.
     if (result.creatives.length > 0) {
-      return NextResponse.json(
-        {
-          ...result,
-          requestId: ctx.requestId,
-        },
-        { status: 200 }
-      );
+      const successBody = {
+        ...result,
+        requestId: ctx.requestId,
+      } satisfies GenerateSuccessResponse;
+      return NextResponse.json(successBody, { status: 200 });
     }
 
     // Zero creatives — surface the highest-severity error as the HTTP response.
