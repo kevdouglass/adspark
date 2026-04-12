@@ -227,6 +227,14 @@ export async function overlayText(
   }
 
   // Step 2: Create canvas at target dimensions
+  //
+  // MEMORY NOTE: @napi-rs/canvas allocates ~4 bytes × width × height in Skia's
+  // heap (1080×1920 ≈ 8MB per canvas). Combined with Sharp's decoded buffer,
+  // peak memory per image is ~16MB. For 6 concurrent images this reaches
+  // ~100MB — well within Vercel's 1024MB function limit, but at higher scale
+  // (50+ concurrent images), process sequentially and let GC collect between
+  // invocations. Canvas and image are function-scoped, so GC collects them
+  // after toBuffer() — no explicit .destroy() call needed.
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
 
