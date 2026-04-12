@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { overlayText, resizeToTarget } from "@/lib/pipeline/textOverlay";
-import { createCanvas } from "@napi-rs/canvas";
+import { overlayText, resizeToTarget, wrapText } from "@/lib/pipeline/textOverlay";
+import { createCanvas, type SKRSContext2D } from "@napi-rs/canvas";
 import sharp from "sharp";
 import type { ImageDimensions } from "@/lib/pipeline/types";
 
@@ -107,20 +107,20 @@ describe("overlayText", () => {
       },
     ];
 
-    for (const testCase of testCases) {
+    for (const aspectRatioScenario of testCases) {
       const dalleImage = await createTestImage(
-        testCase.dalleWidth,
-        testCase.dalleHeight
+        aspectRatioScenario.dalleWidth,
+        aspectRatioScenario.dalleHeight
       );
       const resultBuffer = await overlayText(
         dalleImage,
         CAMPAIGN_MESSAGE,
-        testCase.dimensions
+        aspectRatioScenario.dimensions
       );
       const metadata = await sharp(resultBuffer).metadata();
 
-      expect(metadata.width).toBe(testCase.dimensions.width);
-      expect(metadata.height).toBe(testCase.dimensions.height);
+      expect(metadata.width).toBe(aspectRatioScenario.dimensions.width);
+      expect(metadata.height).toBe(aspectRatioScenario.dimensions.height);
     }
   });
 
@@ -180,12 +180,68 @@ describe("overlayText", () => {
   });
 });
 
-describe("wrapText (via overlayText integration)", () => {
-  it("wraps long text without crashing", async () => {
-    // This indirectly tests wrapText by giving overlayText a message
-    // that definitely needs wrapping at 1080px width with fontSize 54
+describe("wrapText (direct unit tests)", () => {
+  // Create a canvas context for measureText — same setup the real code uses
+  function createTestContext(width: number = 1080): SKRSContext2D {
+    const canvas = createCanvas(width, width);
+    const context = canvas.getContext("2d");
+    const fontSize = Math.round(width / 20); // matches FONT_SIZE_DIVISOR
+    context.font = `bold ${fontSize}px sans-serif`;
+    return context;
+  }
+
+  it("returns a single line for short text", () => {
+    const context = createTestContext();
+    const maxWidth = 1080 * 0.9; // 90% of width (5% padding each side)
+    const lines = wrapText(context, "Short message", maxWidth);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe("Short message");
+  });
+
+  it("wraps long text across multiple lines", () => {
+    const context = createTestContext();
+    const maxWidth = 1080 * 0.9;
+    const longMessage =
+      "This is a very long campaign message that should definitely wrap across multiple lines in the overlay";
+    const lines = wrapText(context, longMessage, maxWidth);
+
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.length).toBeLessThanOrEqual(3);
+  });
+
+  it("truncates with ellipsis when text exceeds 3 lines", () => {
+    const context = createTestContext();
+    const maxWidth = 1080 * 0.9;
+    const veryLongMessage =
+      "This is an extremely long campaign message that goes on and on and keeps going with more words that will certainly exceed three lines of text when rendered at this font size on a 1080 pixel wide canvas with padding applied on both sides";
+    const lines = wrapText(context, veryLongMessage, maxWidth);
+
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toContain("...");
+  });
+
+  it("handles a single word that is wider than maxWidth", () => {
+    const context = createTestContext();
+    const narrowWidth = 100; // very narrow — most words will overflow
+    const lines = wrapText(context, "Supercalifragilisticexpialidocious", narrowWidth);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("...");
+    // Verify it actually fits
+    expect(context.measureText(lines[0]).width).toBeLessThanOrEqual(narrowWidth);
+  });
+
+  it("handles empty string", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, "", 1080 * 0.9);
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it("wraps long text via overlayText integration without crashing", async () => {
     const wrappingMessage =
-      "This is a very long campaign message that should wrap across multiple lines in the overlay band at the bottom of the image";
+      "This is a very long campaign message that should wrap across multiple lines in the overlay band";
     const dalleImage = await createTestImage(1024, 1024);
     const resultBuffer = await overlayText(
       dalleImage,

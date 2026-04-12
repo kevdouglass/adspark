@@ -60,7 +60,7 @@ const LINE_HEIGHT_MULTIPLIER = 1.3;
  * The algorithm respects MAX_LINES: if the text would need more than 3 lines,
  * the last line is truncated with "..." to signal overflow.
  */
-function wrapText(
+export function wrapText(
   context: SKRSContext2D,
   message: string,
   maxWidth: number
@@ -70,18 +70,25 @@ function wrapText(
   let currentLine = "";
 
   for (const word of words) {
-    const testLine = currentLine ? `${currentLine} ${word}` : word;
+    // Handle oversized single word (no spaces, wider than maxWidth)
+    // Truncate character-by-character to prevent overflow
+    const wordWidth = context.measureText(word).width;
+    const safeWord = wordWidth > maxWidth
+      ? truncateWordToFit(context, word, maxWidth)
+      : word;
+
+    const testLine = currentLine ? `${currentLine} ${safeWord}` : safeWord;
     const metrics = context.measureText(testLine);
 
     if (metrics.width > maxWidth && currentLine) {
       // Current line is full — push it and start a new one
       if (lines.length >= MAX_LINES - 1) {
         // Last allowed line — truncate with ellipsis
-        lines.push(truncateWithEllipsis(context, currentLine, word, maxWidth));
+        lines.push(truncateWithEllipsis(context, currentLine, safeWord, maxWidth));
         return lines;
       }
       lines.push(currentLine);
-      currentLine = word;
+      currentLine = safeWord;
     } else {
       currentLine = testLine;
     }
@@ -93,6 +100,24 @@ function wrapText(
   }
 
   return lines.slice(0, MAX_LINES);
+}
+
+/**
+ * Truncate a single word that is wider than maxWidth.
+ * Removes characters from the end until it fits with "...".
+ */
+function truncateWordToFit(
+  context: SKRSContext2D,
+  word: string,
+  maxWidth: number
+): string {
+  for (let charIndex = word.length - 1; charIndex > 0; charIndex--) {
+    const truncated = word.slice(0, charIndex) + "...";
+    if (context.measureText(truncated).width <= maxWidth) {
+      return truncated;
+    }
+  }
+  return "...";
 }
 
 /**
@@ -174,14 +199,30 @@ export async function overlayText(
   const { width, height } = dimensions;
 
   // Step 1: Resize DALL-E output to target platform dimensions
-  const resizedBuffer = await resizeToTarget(imageBuffer, dimensions);
+  let resizedBuffer: Buffer;
+  try {
+    resizedBuffer = await resizeToTarget(imageBuffer, dimensions);
+  } catch (e) {
+    throw new ImageProcessingError(
+      `Failed to resize image to ${width}x${height}: ${e instanceof Error ? e.message : "unknown error"}`,
+      { cause: e }
+    );
+  }
 
   // Step 2: Create canvas at target dimensions
   const canvas = createCanvas(width, height);
   const context = canvas.getContext("2d");
 
   // Step 3: Draw the resized image as background
-  const image = await loadImage(resizedBuffer);
+  let image;
+  try {
+    image = await loadImage(resizedBuffer);
+  } catch (e) {
+    throw new ImageProcessingError(
+      `Failed to load resized image into canvas: ${e instanceof Error ? e.message : "unknown error"}`,
+      { cause: e }
+    );
+  }
   context.drawImage(image, 0, 0, width, height);
 
   // Step 4: Draw semi-transparent band in bottom 25%
@@ -191,6 +232,9 @@ export async function overlayText(
   context.fillRect(0, bandY, width, bandHeight);
 
   // Step 5: Configure text rendering
+  // Font: system sans-serif for POC. Production: register brand fonts via
+  // GlobalFonts.registerFromPath() — see brand-triage-agent.md (ADS-024).
+  // Note: on headless CI/serverless, Skia falls back to a bundled default.
   const fontSize = Math.round(width / FONT_SIZE_DIVISOR);
   const padding = Math.round(width * PADDING_RATIO);
   const maxTextWidth = width - padding * 2;
@@ -202,15 +246,31 @@ export async function overlayText(
   context.textBaseline = "middle";
 
   // Step 6: Word-wrap and render text
+  // C1 fix: textBaseline = "middle" means fillText Y is the vertical center
+  // of the glyph. We position each line at its center — no extra lineHeight/2.
   const lines = wrapText(context, message, maxTextWidth);
   const totalTextHeight = lines.length * lineHeight;
   const textStartY = bandY + (bandHeight - totalTextHeight) / 2;
 
-  lines.forEach((line, lineIndex) => {
+  for (const [lineIndex, line] of lines.entries()) {
     const lineY = textStartY + lineIndex * lineHeight + lineHeight / 2;
     context.fillText(line, width / 2, lineY);
-  });
+  }
 
-  // Step 7: Export as PNG
-  return canvas.toBuffer("image/png");
+  // Step 7: Final Sharp optimization pass (compressionLevel: 6 per spec)
+  // Canvas toBuffer produces unoptimized PNG — Sharp recompresses for
+  // smaller file size without quality loss.
+  const canvasBuffer = canvas.toBuffer("image/png");
+  return sharp(canvasBuffer).png({ compressionLevel: 6 }).toBuffer();
+}
+
+/**
+ * Typed error for image processing failures (resize, canvas, overlay).
+ * Distinguishes processing errors from generation errors (ImageGenerationError).
+ */
+export class ImageProcessingError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ImageProcessingError";
+  }
 }
