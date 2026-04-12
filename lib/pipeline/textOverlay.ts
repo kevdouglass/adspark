@@ -290,7 +290,7 @@ export async function overlayText(
     context.fillText(line, width / 2, lineY);
   }
 
-  // Step 7: Final Sharp optimization pass (compressionLevel: 6 per spec)
+  // Step 8: Final Sharp optimization pass (compressionLevel: 6 per spec)
   // Canvas toBuffer produces unoptimized PNG — Sharp recompresses for
   // smaller file size without quality loss.
   const canvasBuffer = canvas.toBuffer("image/png");
