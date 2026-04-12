@@ -19,8 +19,8 @@ import pLimit from "p-limit";
 import type { GeneratedImage, GenerationTask, PipelineError } from "./types";
 import { withRetry, isRetryableOpenAIError } from "./retry";
 
-/** PNG magic bytes: 0x89 0x50 0x4E 0x47 */
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+// PNG magic bytes per spec: 0x89 0x50 0x4E 0x47
+// Inline comparison avoids module-level Buffer allocation.
 
 /**
  * Generate a single image via DALL-E 3.
@@ -65,8 +65,15 @@ export async function generateImage(
 
   const imageBuffer = Buffer.from(b64, "base64");
 
-  // Validate the decoded buffer is actually a PNG
-  if (imageBuffer.length < 4 || !imageBuffer.subarray(0, 4).equals(PNG_MAGIC)) {
+  // Validate the decoded buffer is actually a PNG via inline magic-byte check
+  const hasValidPngHeader =
+    imageBuffer.length >= 4 &&
+    imageBuffer[0] === 0x89 &&
+    imageBuffer[1] === 0x50 &&
+    imageBuffer[2] === 0x4e &&
+    imageBuffer[3] === 0x47;
+
+  if (!hasValidPngHeader) {
     throw new ImageGenerationError(
       "DALL-E returned corrupt image data (invalid PNG header)",
       task.product.slug,
