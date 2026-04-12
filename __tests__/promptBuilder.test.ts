@@ -20,6 +20,26 @@ import type {
 import { VALID_SEASONS } from "@/lib/pipeline/types";
 
 // ---------------------------------------------------------------------------
+// Test constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum acceptable prompt length in characters.
+ *
+ * Used to assert that generated prompts contain substantive content, not
+ * just whitespace or degenerate output. The number is calibrated to the
+ * current 5-layer template — the shortest realistic prompt (minimal fixture
+ * + smallest aspect ratio composition) is ~600 characters, so a threshold
+ * of 100 is a wide safety margin that would only trip if a layer was
+ * accidentally deleted or a variable was silently omitted.
+ *
+ * Prefer bumping this threshold over lowering it — tighter bounds catch
+ * more regressions. If you find yourself lowering it, the template
+ * probably regressed.
+ */
+const MIN_PROMPT_LENGTH = 100;
+
+// ---------------------------------------------------------------------------
 // Test fixtures — valid campaign + products used across multiple tests
 // ---------------------------------------------------------------------------
 
@@ -429,7 +449,7 @@ describe("buildGenerationTasks — combinatorics", () => {
     // FINDING #6 fix: assert every task prompt is a non-empty, meaningful
     // string. Counting tasks is meaningless if prompts are blank.
     for (const task of tasks) {
-      expect(task.prompt.length).toBeGreaterThan(100);
+      expect(task.prompt.length).toBeGreaterThan(MIN_PROMPT_LENGTH);
       expect(task.prompt).toContain("premium");
     }
   });
@@ -453,7 +473,7 @@ describe("buildGenerationTasks — combinatorics", () => {
     const tasks = buildGenerationTasks(createCampaign(), products, ["1:1", "9:16"]);
     expect(tasks).toHaveLength(6);
     for (const task of tasks) {
-      expect(task.prompt.length).toBeGreaterThan(100);
+      expect(task.prompt.length).toBeGreaterThan(MIN_PROMPT_LENGTH);
     }
   });
 
