@@ -434,15 +434,32 @@ export async function organizeOutput(
     })
   );
 
-  // Step 5: Build and save manifest.json LAST (reflects final state)
-  // creativeErrors are per-creative failures; systemErrors are collected below
-  // for events not tied to a specific creative (e.g., brief.json save failure).
+  // Step 5: Save brief.json FIRST (before manifest)
+  // Rule: manifest writes LAST so it never lies about state. Brief.json is
+  // non-critical — its failure is collected into systemErrors and included
+  // in the manifest we write next. This keeps the on-disk manifest truthful.
   const systemErrors: Array<{
     stage: string;
     message: string;
     retryable: boolean;
   }> = [];
 
+  const briefPath = `${campaignId}/brief.json`;
+  const briefBuffer = Buffer.from(JSON.stringify(brief, null, 2), "utf-8");
+
+  try {
+    await storage.save(briefPath, briefBuffer, CONTENT_TYPE_JSON);
+  } catch (e) {
+    systemErrors.push({
+      stage: "organizing",
+      message: `Failed to save brief.json copy: ${e instanceof Error ? e.message : "unknown"}`,
+      retryable: true,
+    });
+  }
+
+  // Step 6: Build and save manifest.json LAST (reflects final state)
+  // creativeErrors are per-creative failures; systemErrors includes brief.json
+  // failure (if any) since it was attempted before this step.
   const manifest = buildManifest(
     campaignId,
     requestContext,
@@ -464,23 +481,6 @@ export async function organizeOutput(
       `Failed to write manifest.json for campaign ${campaignId}`,
       { cause: e }
     );
-  }
-
-  // Step 6: Save brief.json copy for reproducibility
-  // Non-critical: failure is logged in systemErrors[] but doesn't throw.
-  // Use systemErrors (not creative errors) because this failure isn't tied
-  // to a specific product × aspectRatio pair.
-  const briefPath = `${campaignId}/brief.json`;
-  const briefBuffer = Buffer.from(JSON.stringify(brief, null, 2), "utf-8");
-
-  try {
-    await storage.save(briefPath, briefBuffer, CONTENT_TYPE_JSON);
-  } catch (e) {
-    systemErrors.push({
-      stage: "organizing",
-      message: `Failed to save brief.json copy: ${e instanceof Error ? e.message : "unknown"}`,
-      retryable: true,
-    });
   }
 
   return {
