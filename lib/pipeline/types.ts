@@ -125,11 +125,41 @@ export interface CreativeOutput {
 }
 
 /**
+ * Typed classification of what caused a pipeline error.
+ *
+ * Used by the API layer to map errors to HTTP status codes via a
+ * compile-time exhaustive switch (see `lib/api/errors.ts`). Adding a
+ * new variant forces every consumer to handle it or TypeScript errors.
+ *
+ * See docs/adr/ADR-003-typed-error-cause-discriminants.md for rationale.
+ */
+export type PipelineErrorCause =
+  /** DALL-E 400 — prompt rejected for safety/policy reasons, non-retryable */
+  | "content_policy"
+  /** 429 from any upstream (OpenAI, S3) — retryable with backoff */
+  | "rate_limited"
+  /** AbortSignal timeout fired (client-level) — non-retryable at orchestrator level */
+  | "upstream_timeout"
+  /** 5xx from any upstream — retryable */
+  | "upstream_error"
+  /** Brief validation failed (Zod errors) — non-retryable */
+  | "invalid_input"
+  /** Storage provider failure (S3 PutObject, filesystem write) — retryable */
+  | "storage_error"
+  /** Sharp / @napi-rs/canvas failure during compositing — non-retryable */
+  | "processing_error"
+  /** Unclassified error — fallback only */
+  | "unknown";
+
+/**
  * Unified error shape for all pipeline stages.
  *
  * `product` and `aspectRatio` are optional because some errors are
  * system-level (e.g., brief.json save failure, timeout budget exceeded,
  * validation failure) and not tied to a specific product × ratio pair.
+ *
+ * `cause` is required for compile-time exhaustiveness in the API error
+ * mapping table. Use `"unknown"` only when classification isn't possible.
  *
  * Consumers MUST handle both variants:
  * - Creative errors: product + aspectRatio both defined
@@ -139,6 +169,7 @@ export interface PipelineError {
   product?: string;
   aspectRatio?: AspectRatio;
   stage: PipelineStage;
+  cause: PipelineErrorCause;
   message: string;
   retryable: boolean;
 }

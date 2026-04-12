@@ -14,10 +14,41 @@
  * See docs/architecture/orchestration.md (retry policy, concurrency)
  */
 
-import type OpenAI from "openai";
+import OpenAI from "openai";
 import pLimit from "p-limit";
-import type { GeneratedImage, GenerationTask, PipelineError } from "./types";
+import type {
+  GeneratedImage,
+  GenerationTask,
+  PipelineError,
+  PipelineErrorCause,
+} from "./types";
 import { withRetry, isRetryableOpenAIError } from "./retry";
+
+/**
+ * Classify an upstream error into a typed PipelineErrorCause.
+ *
+ * This is where classification happens — at the error-producing site,
+ * where we have the most context about what went wrong. The API layer
+ * then maps the cause to an HTTP status without any string matching.
+ *
+ * See docs/adr/ADR-003-typed-error-cause-discriminants.md for rationale.
+ */
+export function classifyOpenAIError(error: unknown): PipelineErrorCause {
+  if (error instanceof OpenAI.APIError) {
+    if (error.status === 400) return "content_policy";
+    if (error.status === 429) return "rate_limited";
+    if (error.status >= 500) return "upstream_error";
+    return "upstream_error"; // Other 4xx
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return "upstream_timeout";
+  }
+  if (error instanceof ImageGenerationError) {
+    // PNG validation failure, empty response — treat as processing error
+    return "processing_error";
+  }
+  return "unknown";
+}
 
 // PNG magic bytes per spec: 0x89 0x50 0x4E 0x47
 // We inline this check in generateImage() via direct byte comparison
@@ -121,11 +152,13 @@ export async function generateImages(
       const error = result.reason;
       const isRetryable =
         error instanceof Error && isRetryableOpenAIError(error);
+      const cause = classifyOpenAIError(error);
 
       errors.push({
         product: task.product.slug,
         aspectRatio: task.aspectRatio,
         stage: "generating",
+        cause,
         message:
           error instanceof Error
             ? error.message

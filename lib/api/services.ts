@@ -84,10 +84,16 @@ export function validateRequiredEnv(): void {
 /**
  * Thrown when required env vars are missing.
  * API routes catch this and map to 500 INTERNAL_ERROR / MISSING_CONFIGURATION.
+ *
+ * `Object.setPrototypeOf` is called in the constructor to restore the
+ * prototype chain across ES5/ES6 target boundaries — without this,
+ * `error instanceof MissingConfigurationError` can return false in
+ * transpiled environments.
  */
 export class MissingConfigurationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "MissingConfigurationError";
+    Object.setPrototypeOf(this, MissingConfigurationError.prototype);
   }
 }

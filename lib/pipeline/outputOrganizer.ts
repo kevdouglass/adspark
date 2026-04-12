@@ -297,6 +297,7 @@ export async function organizeOutput(
         product: creative.product.slug,
         aspectRatio: creative.aspectRatio,
         stage: "organizing",
+        cause: "processing_error",
         message: `Thumbnail generation failed: ${result.reason instanceof Error ? result.reason.message : "unknown"}`,
         retryable: false,
       });
@@ -353,6 +354,7 @@ export async function organizeOutput(
         product: task.creative.product.slug,
         aspectRatio: task.creative.aspectRatio,
         stage: "organizing",
+        cause: "storage_error",
         message: `Failed to save ${task.kind} (${task.key}): ${errorMessage}`,
         retryable: true,
       });
@@ -375,6 +377,7 @@ export async function organizeOutput(
         product: creative.product.slug,
         aspectRatio: creative.aspectRatio,
         stage: "organizing",
+        cause: "storage_error",
         message: `Orphaned creative.png saved but thumbnail.webp failed — creative marked unusable`,
         retryable: true,
       });
@@ -383,6 +386,7 @@ export async function organizeOutput(
         product: creative.product.slug,
         aspectRatio: creative.aspectRatio,
         stage: "organizing",
+        cause: "storage_error",
         message: `Orphaned thumbnail.webp saved but creative.png failed — creative marked unusable`,
         retryable: true,
       });

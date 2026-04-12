@@ -188,15 +188,19 @@ describe("POST /api/generate", () => {
 
     expect(response.status).toBe(500);
     expect(body.code).toBe("MISSING_CONFIGURATION");
-    expect(body.message).toContain("OPENAI_API_KEY");
+    // Finding #6 fix: the response message should NOT contain internal
+    // details like env var names. The original error is logged server-side.
+    expect(body.message).not.toContain("OPENAI_API_KEY");
     expect(body.requestId).toBeDefined();
     expect(mockRunPipeline).not.toHaveBeenCalled();
   });
 
+  // --- Error mapping table tests (Finding #8: stage coverage) ---
+
   it("returns 422 with CONTENT_POLICY_VIOLATION for content policy failures", async () => {
     mockRunPipeline.mockResolvedValue({
       campaignId: "summer-2026-suncare",
-      creatives: [], // No creatives — zero-success case
+      creatives: [],
       totalTimeMs: 5000,
       totalImages: 0,
       errors: [
@@ -204,6 +208,7 @@ describe("POST /api/generate", () => {
           product: "spf-50-sunscreen",
           aspectRatio: "1:1",
           stage: "generating",
+          cause: "content_policy",
           message: "Content policy violation: prompt rejected",
           retryable: false,
         },
@@ -219,8 +224,132 @@ describe("POST /api/generate", () => {
     expect(body.requestId).toBeDefined();
   });
 
-  it("always includes requestId in both success and error responses", async () => {
-    // Test 1: Success path
+  it("returns 503 with UPSTREAM_RATE_LIMITED for rate limit errors", async () => {
+    mockRunPipeline.mockResolvedValue({
+      campaignId: "summer-2026-suncare",
+      creatives: [],
+      totalTimeMs: 5000,
+      totalImages: 0,
+      errors: [
+        {
+          product: "spf-50-sunscreen",
+          aspectRatio: "1:1",
+          stage: "generating",
+          cause: "rate_limited",
+          message: "Rate limited",
+          retryable: true,
+        },
+      ],
+    });
+
+    const response = await POST(createPostRequest(VALID_BRIEF));
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(body.code).toBe("UPSTREAM_RATE_LIMITED");
+  });
+
+  it("returns 504 with UPSTREAM_TIMEOUT for timeout errors", async () => {
+    mockRunPipeline.mockResolvedValue({
+      campaignId: "summer-2026-suncare",
+      creatives: [],
+      totalTimeMs: 45000,
+      totalImages: 0,
+      errors: [
+        {
+          stage: "generating",
+          cause: "upstream_timeout",
+          message: "Pipeline timeout budget exceeded",
+          retryable: true,
+        },
+      ],
+    });
+
+    const response = await POST(createPostRequest(VALID_BRIEF));
+    const body = await response.json();
+
+    expect(response.status).toBe(504);
+    expect(body.code).toBe("UPSTREAM_TIMEOUT");
+  });
+
+  it("returns 502 with UPSTREAM_ERROR for generic upstream failures", async () => {
+    mockRunPipeline.mockResolvedValue({
+      campaignId: "summer-2026-suncare",
+      creatives: [],
+      totalTimeMs: 10000,
+      totalImages: 0,
+      errors: [
+        {
+          product: "spf-50-sunscreen",
+          aspectRatio: "1:1",
+          stage: "generating",
+          cause: "upstream_error",
+          message: "OpenAI 500",
+          retryable: true,
+        },
+      ],
+    });
+
+    const response = await POST(createPostRequest(VALID_BRIEF));
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body.code).toBe("UPSTREAM_ERROR");
+  });
+
+  it("returns 500 with STORAGE_ERROR for organizing stage failures", async () => {
+    mockRunPipeline.mockResolvedValue({
+      campaignId: "summer-2026-suncare",
+      creatives: [],
+      totalTimeMs: 25000,
+      totalImages: 0,
+      errors: [
+        {
+          product: "spf-50-sunscreen",
+          aspectRatio: "1:1",
+          stage: "organizing",
+          cause: "storage_error",
+          message: "S3 PutObject failed",
+          retryable: true,
+        },
+      ],
+    });
+
+    const response = await POST(createPostRequest(VALID_BRIEF));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.code).toBe("STORAGE_ERROR");
+  });
+
+  it("returns 500 with PROCESSING_ERROR for compositing stage failures", async () => {
+    mockRunPipeline.mockResolvedValue({
+      campaignId: "summer-2026-suncare",
+      creatives: [],
+      totalTimeMs: 20000,
+      totalImages: 0,
+      errors: [
+        {
+          product: "spf-50-sunscreen",
+          aspectRatio: "1:1",
+          stage: "compositing",
+          cause: "processing_error",
+          message: "Canvas rendering failed",
+          retryable: false,
+        },
+      ],
+    });
+
+    const response = await POST(createPostRequest(VALID_BRIEF));
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.code).toBe("PROCESSING_ERROR");
+  });
+
+  // --- requestId tests (Finding #11: split into 2 independent tests) ---
+
+  it("includes requestId in successful generation responses", async () => {
     mockRunPipeline.mockResolvedValue({
       campaignId: "summer-2026-suncare",
       creatives: [
@@ -241,18 +370,52 @@ describe("POST /api/generate", () => {
       errors: [],
     });
 
-    const successResponse = await POST(createPostRequest(VALID_BRIEF));
-    const successBody = await successResponse.json();
-    expect(successBody.requestId).toBeDefined();
+    const response = await POST(createPostRequest(VALID_BRIEF));
+    const body = await response.json();
 
-    // Test 2: Error path (validation)
-    const errorResponse = await POST(
-      createPostRequest({ ...VALID_BRIEF, campaign: { ...VALID_BRIEF.campaign, id: "" } })
+    expect(response.status).toBe(200);
+    expect(body.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     );
-    const errorBody = await errorResponse.json();
-    expect(errorBody.requestId).toBeDefined();
+  });
 
-    // Both requestIds are valid UUIDs and DIFFERENT (per-request isolation)
-    expect(successBody.requestId).not.toBe(errorBody.requestId);
+  it("includes requestId in validation error responses", async () => {
+    const invalidBrief = {
+      ...VALID_BRIEF,
+      campaign: { ...VALID_BRIEF.campaign, id: "" },
+    };
+    const response = await POST(createPostRequest(invalidBrief));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+  });
+
+  it("generates unique requestId per request (isolation)", async () => {
+    mockRunPipeline.mockResolvedValue({
+      campaignId: "summer-2026-suncare",
+      creatives: [],
+      totalTimeMs: 100,
+      totalImages: 0,
+      errors: [
+        {
+          stage: "validating",
+          cause: "invalid_input",
+          message: "test",
+          retryable: false,
+        },
+      ],
+    });
+
+    const response1 = await POST(createPostRequest(VALID_BRIEF));
+    const body1 = await response1.json();
+    const response2 = await POST(createPostRequest(VALID_BRIEF));
+    const body2 = await response2.json();
+
+    expect(body1.requestId).toBeDefined();
+    expect(body2.requestId).toBeDefined();
+    expect(body1.requestId).not.toBe(body2.requestId);
   });
 });
