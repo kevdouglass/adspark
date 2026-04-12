@@ -141,14 +141,20 @@ export async function generateImages(
 /**
  * Typed error for image generation failures.
  * Carries product and aspect ratio context for partial failure reporting.
+ * Supports `cause` chaining to preserve the original OpenAI APIError
+ * (status code, request ID) for downstream debugging.
+ *
+ * Exported so the pipeline orchestrator (ADS-004) and API route (ADS-005)
+ * can use `instanceof` for typed catch blocks and error response mapping.
  */
-class ImageGenerationError extends Error {
+export class ImageGenerationError extends Error {
   constructor(
     message: string,
     public readonly productSlug: string,
-    public readonly aspectRatio: string
+    public readonly aspectRatio: string,
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     this.name = "ImageGenerationError";
   }
 }
