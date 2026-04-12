@@ -48,6 +48,12 @@ export type ApiErrorCode =
   | "INVALID_BRIEF"
   | "REQUEST_TOO_LARGE"
   | "CONTENT_POLICY_VIOLATION"
+  // 404-class: resource not found (server-originated). Used by the file-
+  // serving route and any future /api/campaigns/[id]-style lookups. A
+  // dedicated code lets clients branch on "not found" without routing
+  // 404s through the 500-class INTERNAL_ERROR bucket (which triggers
+  // retries, Sentry alerts, etc.).
+  | "NOT_FOUND"
   // 500-class: server errors (server-originated)
   | "MISSING_CONFIGURATION"
   | "UPSTREAM_ERROR"
@@ -85,6 +91,7 @@ export const KNOWN_API_ERROR_CODES: ReadonlySet<ApiErrorCode> = new Set<ApiError
   "INVALID_BRIEF",
   "REQUEST_TOO_LARGE",
   "CONTENT_POLICY_VIOLATION",
+  "NOT_FOUND",
   "MISSING_CONFIGURATION",
   "UPSTREAM_ERROR",
   "UPSTREAM_RATE_LIMITED",
