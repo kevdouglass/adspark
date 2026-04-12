@@ -17,15 +17,16 @@ import { AppProviders } from "@/components/providers/AppProviders";
 import { BriefForm } from "@/components/BriefForm";
 import { PipelineProgress } from "@/components/PipelineProgress";
 import { CreativeGallery } from "@/components/CreativeGallery";
+import { DashboardIdleState } from "@/components/DashboardIdleState";
 
 export default function Home() {
   return (
     <AppProviders>
-      <div className="flex min-h-screen flex-col bg-[var(--bg)] lg:flex-row">
+      <div className="flex min-h-screen flex-col bg-[var(--bg)] lg:h-screen lg:min-h-0 lg:flex-row lg:overflow-hidden">
         {/* ----------------------------------------------------------- */}
-        {/* Sidebar — 300px fixed, hosts the BriefForm                   */}
+        {/* Sidebar — 340px fixed, hosts the BriefForm                   */}
         {/* ----------------------------------------------------------- */}
-        <aside className="w-full border-b border-[var(--border)] bg-[var(--bg)] lg:w-[340px] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
+        <aside className="w-full border-b border-[var(--border)] bg-[var(--bg)] lg:h-screen lg:w-[340px] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
           <div className="flex h-full flex-col">
             {/* Brand header */}
             <header className="border-b border-[var(--border)] px-6 py-5">
@@ -52,10 +53,11 @@ export default function Home() {
         </aside>
 
         {/* ----------------------------------------------------------- */}
-        {/* Canvas — wide area hosting progress + gallery                */}
+        {/* Canvas — wide area hosting idle hero / progress / gallery    */}
         {/* ----------------------------------------------------------- */}
-        <main className="flex-1 bg-[var(--surface)] p-6 lg:p-8">
+        <main className="flex-1 overflow-y-auto bg-[var(--surface)] p-6 lg:p-8">
           <div className="mx-auto flex max-w-5xl flex-col gap-6">
+            <DashboardIdleState />
             <PipelineProgress />
             <CreativeGallery />
           </div>

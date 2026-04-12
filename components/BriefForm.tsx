@@ -32,6 +32,7 @@
 
 "use client";
 
+import { useState } from "react";
 import {
   useForm,
   useFieldArray,
@@ -45,6 +46,11 @@ import type { GenerateRequestBody } from "@/lib/api/types";
 import type { AspectRatio, Season } from "@/lib/pipeline/types";
 import { VALID_SEASONS } from "@/lib/pipeline/types";
 import { SAMPLE_BRIEFS, DEFAULT_BRIEF, DEFAULT_BRIEF_ID } from "@/lib/briefs/sampleBriefs";
+import {
+  BriefGeneratorAI,
+  type OrchestrationPhase,
+} from "@/components/BriefGeneratorAI";
+import type { ApiError } from "@/lib/api/errors";
 
 const ASPECT_RATIOS: AspectRatio[] = ["1:1", "9:16", "16:9"];
 const CAMPAIGN_MESSAGE_MAX = 140;
@@ -77,6 +83,17 @@ function slugify(value: string): string {
 export function BriefForm() {
   const { state, submit } = usePipelineState();
 
+  // Local state for the natural-language prompt that feeds the multi-
+  // agent orchestrator. Lives here (not in the hook) because the hook
+  // is about pipeline state — orchestration is a preprocessing step
+  // that runs before the pipeline.
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [orchestrationPhase, setOrchestrationPhase] =
+    useState<OrchestrationPhase>("idle");
+  const [orchestrationError, setOrchestrationError] = useState<ApiError | null>(
+    null
+  );
+
   const form = useForm<GenerateRequestBody>({
     resolver: zodResolver(campaignBriefSchema),
     defaultValues: DEFAULT_BRIEF,
@@ -100,8 +117,14 @@ export function BriefForm() {
   const messageValue = watch("campaign.message") ?? "";
   const messageRemaining = CAMPAIGN_MESSAGE_MAX - messageValue.length;
 
+  // "In flight" now covers orchestration AND pipeline so the form
+  // disables inputs during either phase.
+  const isOrchestrating =
+    orchestrationPhase !== "idle" && orchestrationPhase !== "error";
   const isInFlight =
-    state.status === "submitting" || state.status === "generating";
+    isOrchestrating ||
+    state.status === "submitting" ||
+    state.status === "generating";
 
   /**
    * Handle the sample brief dropdown. Uses react-hook-form's `reset`
@@ -116,12 +139,134 @@ export function BriefForm() {
   }
 
   /**
-   * Submit handler — called by react-hook-form only when Zod validation
-   * passes. The pipeline state hook's `submit()` has its own double-submit
-   * guard (inFlightRef), so calling it twice in quick succession is safe.
+   * Run the multi-agent orchestration and return the refined brief.
+   *
+   * The UI is updated optimistically through `orchestrationPhase` —
+   * the phase transitions are synthetic (we don't know in real time
+   * which phase the server is in), but they give the user a sense of
+   * progression. Wall time is ~10-12s so the 4 phases cycle through
+   * quickly enough to feel responsive.
+   *
+   * Returns null on failure. The caller then falls back to submitting
+   * the form state as-is.
+   */
+  async function runOrchestration(
+    prompt: string,
+    formState: GenerateRequestBody
+  ): Promise<GenerateRequestBody | null> {
+    setOrchestrationPhase("triaging");
+    setOrchestrationError(null);
+
+    // Synthetic phase timing so the UI feels progressive while the
+    // server runs the real orchestration. The phases don't strictly
+    // line up with server phases, but they cycle fast enough that a
+    // user sees meaningful status text the whole time.
+    const phaseTimers = [
+      setTimeout(() => setOrchestrationPhase("drafting"), 2000),
+      setTimeout(() => setOrchestrationPhase("reviewing"), 5000),
+      setTimeout(() => setOrchestrationPhase("synthesizing"), 9000),
+    ];
+
+    try {
+      const response = await fetch("/api/orchestrate-brief", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          existingBrief: formState,
+        }),
+      });
+
+      phaseTimers.forEach(clearTimeout);
+
+      let responseBody: unknown;
+      try {
+        responseBody = await response.json();
+      } catch {
+        setOrchestrationError({
+          code: "INTERNAL_ERROR",
+          message: "Orchestrator returned an invalid response.",
+          requestId: `client-${crypto.randomUUID()}`,
+        });
+        setOrchestrationPhase("error");
+        return null;
+      }
+
+      if (!response.ok) {
+        const err = responseBody as Partial<ApiError>;
+        setOrchestrationError({
+          code: err.code ?? "INTERNAL_ERROR",
+          message:
+            err.message ??
+            "Brief orchestration failed. Please try rephrasing your description or submit the form as-is.",
+          requestId: err.requestId ?? `client-${crypto.randomUUID()}`,
+          details: err.details,
+        });
+        setOrchestrationPhase("error");
+        return null;
+      }
+
+      const success = responseBody as {
+        brief?: GenerateRequestBody;
+      };
+      if (!success.brief) {
+        setOrchestrationError({
+          code: "INTERNAL_ERROR",
+          message: "Orchestrator returned an unexpected response shape.",
+          requestId: `client-${crypto.randomUUID()}`,
+        });
+        setOrchestrationPhase("error");
+        return null;
+      }
+
+      setOrchestrationPhase("idle");
+      return success.brief;
+    } catch {
+      phaseTimers.forEach(clearTimeout);
+      setOrchestrationError({
+        code: "CLIENT_NETWORK_ERROR",
+        message:
+          "Could not reach the orchestrator. Check your connection and try again.",
+        requestId: `client-${crypto.randomUUID()}`,
+      });
+      setOrchestrationPhase("error");
+      return null;
+    }
+  }
+
+  /**
+   * Submit handler — the core of the one-button unified flow.
+   *
+   * Path A (no AI prompt): skip orchestration, submit the form as-is.
+   * Path B (AI prompt present): run the multi-agent orchestrator first
+   *   to refine the brief, reset the form visually, then submit the
+   *   refined brief to the pipeline.
+   * Path C (orchestration fails): show the error inline, leave the
+   *   form alone, do NOT auto-fall-back to submitting the draft brief
+   *   (that's user-confusing; better to let them retry or click again
+   *   with an empty prompt to skip orchestration).
    */
   const onSubmit = handleSubmit(async (data) => {
-    await submit(data);
+    const trimmedPrompt = aiPrompt.trim();
+    if (trimmedPrompt.length === 0) {
+      // Path A — normal pipeline submission
+      await submit(data);
+      return;
+    }
+
+    // Path B — orchestrate first
+    const refined = await runOrchestration(trimmedPrompt, data);
+    if (!refined) {
+      // Path C — orchestration failed, leave the error visible
+      return;
+    }
+
+    // Atomic populate — the user sees the AI-refined form before
+    // the pipeline starts running. Clears aiPrompt so the next click
+    // defaults to Path A unless they type a new prompt.
+    reset(refined);
+    setAiPrompt("");
+    await submit(refined);
   });
 
   return (
@@ -130,6 +275,40 @@ export function BriefForm() {
       noValidate
       className="flex flex-col gap-6"
     >
+      {/* ------------------------------------------------------------- */}
+      {/* AI Brief Orchestrator — natural-language → multi-agent review  */}
+      {/* ------------------------------------------------------------- */}
+      <BriefGeneratorAI
+        value={aiPrompt}
+        onChange={setAiPrompt}
+        disabled={isInFlight}
+        orchestrationPhase={orchestrationPhase}
+      />
+      {orchestrationError && (
+        <div
+          role="alert"
+          className="rounded-md border border-[var(--error)] bg-red-50 p-3"
+        >
+          <p className="text-xs font-semibold text-[var(--error)]">
+            {orchestrationError.code}
+          </p>
+          <p className="mt-1 text-xs text-[var(--ink)]">
+            {orchestrationError.message}
+          </p>
+          {orchestrationError.details &&
+            orchestrationError.details.length > 0 && (
+              <ul className="mt-2 list-disc space-y-0.5 pl-4 text-[10px] text-[var(--ink-muted)]">
+                {orchestrationError.details.map((d, i) => (
+                  <li key={i}>{d}</li>
+                ))}
+              </ul>
+            )}
+          <p className="mt-2 font-mono text-[10px] text-[var(--ink-muted)]">
+            {orchestrationError.requestId}
+          </p>
+        </div>
+      )}
+
       {/* ------------------------------------------------------------- */}
       {/* Sample brief selector                                          */}
       {/* ------------------------------------------------------------- */}
@@ -309,8 +488,15 @@ export function BriefForm() {
 
       {/* ------------------------------------------------------------- */}
       {/* Aspect ratio checkboxes                                        */}
+      {/*                                                                */}
+      {/* `pb-24` reserves clear space below this section so the         */}
+      {/* sticky submit footer (below) never visually overlaps the       */}
+      {/* checkboxes when the sidebar is scrolled to the bottom. Without */}
+      {/* it, the gradient CTA covers the last ~80px of content and the  */}
+      {/* checkboxes become unclickable — an MD3 primary-action          */}
+      {/* violation. The padding equals the footer height + a buffer.   */}
       {/* ------------------------------------------------------------- */}
-      <section>
+      <section className="pb-24">
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
           Aspect Ratios
         </h2>
@@ -339,26 +525,41 @@ export function BriefForm() {
         )}
       </section>
 
-      {/* Hidden outputFormats — not user-configurable, always png + webp */}
-      <input type="hidden" {...register("outputFormats.creative")} value="png" />
-      <input
-        type="hidden"
-        {...register("outputFormats.thumbnail")}
-        value="webp"
-      />
+      {/* outputFormats: NO hidden inputs. react-hook-form already keeps
+          these values in state via `DEFAULT_BRIEF.outputFormats`, and
+          rendering <input type="hidden" {...register(...)} value="..." />
+          mixes uncontrolled register with an explicit controlled value,
+          which generates a React warning and can desync the tracked
+          value from what gets submitted. Since the user never edits
+          these fields, we simply don't render them. */}
 
       {/* ------------------------------------------------------------- */}
-      {/* Submit CTA — the one gradient element in the whole page        */}
+      {/* Submit CTA — sticky footer                                     */}
+      {/*                                                                */}
+      {/* WHY sticky bottom-0: MD3's primary-action guidance says the    */}
+      {/* primary CTA should be reachable without scrolling. The brief   */}
+      {/* form is long enough to overflow the sidebar on most screens,   */}
+      {/* so we pin the Generate button to the bottom of the scroll      */}
+      {/* viewport. Negative margins cancel the parent's px-6/py-5 so    */}
+      {/* the footer bleeds edge-to-edge with its own bg + border-top,   */}
+      {/* reading as a distinct footer region rather than a floating     */}
+      {/* button.                                                        */}
       {/* ------------------------------------------------------------- */}
-      <button
-        type="submit"
-        disabled={isInFlight}
-        aria-busy={isInFlight}
-        className="mt-2 w-full rounded-md px-4 py-3 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-        style={{ background: "var(--accent-gradient)" }}
-      >
-        {isInFlight ? "Generating..." : "Generate Creatives →"}
-      </button>
+      <div className="sticky bottom-0 -mx-6 -mb-5 mt-2 border-t border-[var(--border)] bg-[var(--bg)] px-6 py-4">
+        <button
+          type="submit"
+          disabled={isInFlight}
+          aria-busy={isInFlight}
+          className="w-full rounded-md px-4 py-3 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          style={{ background: "var(--accent-gradient)" }}
+        >
+          {isOrchestrating
+            ? "AI agents refining brief..."
+            : state.status === "submitting" || state.status === "generating"
+              ? "Generating creatives..."
+              : "Generate Creatives →"}
+        </button>
+      </div>
     </form>
   );
 }

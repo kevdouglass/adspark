@@ -25,6 +25,31 @@ import type {
 import { withRetry, isRetryableOpenAIError } from "./retry";
 
 /**
+ * Maximum number of concurrent DALL-E 3 requests.
+ *
+ * OpenAI DALL-E 3 Tier 1 quota is ~5 images per minute. Running 5 in
+ * parallel per batch means a 6-image brief splits into two waves of
+ * 5+1, which is the calibration baseline for `PIPELINE_BUDGET_MS` in
+ * `lib/api/timeouts.ts`. If you change this value, recompute that
+ * budget — the pipeline.ts JSDoc references this constant explicitly
+ * so a diff here forces re-review of the timing math.
+ *
+ * Tier 2+ accounts can raise this to 10+ for single-wave generation
+ * of 6-image briefs, which cuts wall-clock roughly in half. For a POC
+ * targeting Tier 1 quotas, 5 is the safe ceiling.
+ */
+export const DALLE_CONCURRENCY_LIMIT = 5;
+
+/**
+ * Retry base delay (ms). Exponential backoff: attempt 1 fail → wait
+ * 500ms, attempt 2 fail → wait 1000ms, attempt 3 → throw without delay.
+ * Worst-case adds ~1.5s to a single image on a 429 rate-limit, vs ~3s
+ * at the prior 1000ms base. Keeps retries cheap enough to not blow the
+ * 50s pipeline budget on a handful of rate-limited calls.
+ */
+export const DALLE_RETRY_BASE_DELAY_MS = 500;
+
+/**
  * Classify an upstream error into a typed PipelineErrorCause.
  *
  * This is where classification happens — at the error-producing site,
@@ -80,7 +105,7 @@ export async function generateImage(
       }),
     {
       maxAttempts: 3,
-      baseDelayMs: 1000,
+      baseDelayMs: DALLE_RETRY_BASE_DELAY_MS,
       shouldRetry: isRetryableOpenAIError,
     }
   );
@@ -120,21 +145,11 @@ export async function generateImage(
 }
 
 /**
- * Default parallelism for DALL-E 3 image generation.
- *
- * Calibrated for OpenAI Tier 1, which allows ~5 images/min. Raising
- * this risks a 429 on the Nth call; lowering it serializes work and
- * breaks the pipeline timeout budget math in `lib/api/timeouts.ts`
- * (which assumes wave 1 runs 5 images in parallel). Any change here
- * MUST be re-reconciled with `PIPELINE_BUDGET_MS`.
- */
-export const DALLE_CONCURRENCY_LIMIT = 5;
-
-/**
  * Generate images for all tasks in parallel with concurrency limiting.
  *
- * Uses p-limit(DALLE_CONCURRENCY_LIMIT) to respect OpenAI Tier 1 rate
- * limits. Uses Promise.allSettled so one failure doesn't kill the batch.
+ * Uses `p-limit(DALLE_CONCURRENCY_LIMIT)` to respect OpenAI Tier 1
+ * rate limits. Uses `Promise.allSettled` so one failure doesn't kill
+ * the batch.
  *
  * Returns both successful images AND typed errors for failed ones —
  * the caller (pipeline orchestrator) decides how to surface partial failures.
