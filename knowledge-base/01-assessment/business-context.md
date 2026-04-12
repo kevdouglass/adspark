@@ -268,6 +268,22 @@ From the assessment PDF: *"Please ensure that your solution reflects thoughtful 
 
 ---
 
+### Integration Architecture (Added Post-Planning)
+
+**D-28** | *"Why not use MCP for the API integrations?"*
+"MCP is for AI agents that reason about tool selection at runtime — 'should I use tool A or tool B?' Our pipeline is deterministic: it always calls DALL-E, always saves to S3, in a fixed sequence. There's no LLM deciding which tool to invoke. Direct SDK calls are simpler, faster, and more debuggable. However, the Brand Triage Agent in production WOULD use MCP — it's an LLM that reasons about which brand data sources to query (website scraper MCP, social media MCP, DAM connector). Knowing when MCP is the right pattern versus when it's overhead is an architectural judgment call."
+`[Source: Integration layer audit, docs/TICKET-PLAN.md integration analysis]`
+
+**D-29** | *"How do the frontend and backend communicate?"*
+"Typed API client layer. `lib/api/client.ts` exports typed functions — `generateCreatives()`, `uploadAsset()`, `getCampaign()` — that call the Next.js API routes via fetch. `lib/api/types.ts` defines the shared request/response contracts that both the route handlers and the client consume. No `any` casts, no duplicated fetch logic. The Zod schemas validate incoming data on both sides — server validates the brief, client validates the response."
+`[Source: ADS-026, ADS-027 ticket definitions]`
+
+**D-30** | *"What about the dependency injection story?"*
+"API routes use a service setup layer — `lib/api/services.ts` — that creates the OpenAI client and storage provider once per request with validated env vars. This keeps routes thin (parse request, call pipeline, return response) and makes testing trivial — mock `getOpenAIClient()` and `getStorage()` to inject test doubles. All env validation happens once at the top via Zod, not scattered across pipeline modules."
+`[Source: ADS-028 ticket definition, orchestration.md env handling]`
+
+---
+
 ## Appendix: Key Contacts
 
 | Name | Role | Contact | Notes |

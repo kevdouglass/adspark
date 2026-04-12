@@ -505,3 +505,171 @@ Phase 4 — "Ship It" (unchanged)
 Phase 5 — "Bonus Points" (unchanged)
   ADS-009 → ADS-021 → ADS-023 → ADS-013 → ADS-022 → ADS-024
 ```
+
+---
+
+## Integration Layer Analysis
+
+> Audit of how each layer connects to the next. Identifies missing glue code,
+> shared contracts, and clarifies why MCP is NOT the right pattern here.
+
+### System Topology
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        FRONTEND (React)                                 │
+│                                                                         │
+│  BriefForm ──┐                                                          │
+│              │  lib/api/client.ts  (ADS-026)                            │
+│              ├──── POST /api/generate ──────── fetch() ─────┐           │
+│              │     POST /api/upload   ──────── fetch() ─────┤           │
+│  Gallery ◄───┤     GET  /api/campaigns/:id ── fetch() ─────┤           │
+│  Progress ◄──┘                                              │           │
+│  D3Charts ◄──── reads PipelineResult                        │           │
+│                                                              │           │
+│  Shared state: usePipelineState() hook (ADS-025)            │           │
+│  Shared types: lib/api/types.ts (ADS-027)                   │           │
+└──────────────────────────────────────────────────────────────┼───────────┘
+                                                               │
+                          NETWORK BOUNDARY (fetch / JSON)       │
+                                                               │
+┌──────────────────────────────────────────────────────────────┼───────────┐
+│                       BACKEND (Next.js API Routes)           │           │
+│                                                              ▼           │
+│  app/api/generate/route.ts ──── validates env ──┐                       │
+│  app/api/upload/route.ts   ──── validates env ──┤                       │
+│  app/api/campaigns/route.ts ─── validates env ──┤                       │
+│  app/api/files/[key]/route.ts ── serves local ──┘                       │
+│                                       │                                  │
+│              createStorage() ─────────┤                                  │
+│              runPipeline()  ──────────┤                                  │
+│                                       │                                  │
+└───────────────────────────────────────┼──────────────────────────────────┘
+                                        │
+                          FUNCTION CALLS (direct SDK, NOT MCP)
+                                        │
+┌───────────────────────────────────────┼──────────────────────────────────┐
+│                    EXTERNAL SERVICES   │                                  │
+│                                        ▼                                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                   │
+│  │  OpenAI API   │  │  AWS S3      │  │  Filesystem  │                   │
+│  │  DALL-E 3     │  │  (prod)      │  │  (local dev) │                   │
+│  │              │  │              │  │              │                   │
+│  │  Called via:  │  │  Called via:  │  │  Called via:  │                   │
+│  │  openai SDK   │  │  @aws-sdk    │  │  node:fs     │                   │
+│  │  (direct)     │  │  (direct)    │  │  (direct)    │                   │
+│  └──────────────┘  └──────────────┘  └──────────────┘                   │
+│                                                                          │
+│  NOT MCP — these are deterministic SDK calls, not agent tool discovery   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why NOT MCP for This Pipeline
+
+| Question | Answer |
+|----------|--------|
+| Does an LLM decide which tool to call? | **No** — the pipeline is hardcoded: parse → generate → overlay → save |
+| Are tools discovered at runtime? | **No** — we import `openai` and `@aws-sdk` statically |
+| Does the system reason about which API to use? | **No** — it always calls DALL-E 3, always saves to StorageProvider |
+| Is there an agent loop? | **No** — it's a linear pipeline, not a reasoning loop |
+
+MCP is for **AI agents that reason about tool selection**. Our pipeline is a **deterministic function composition** — the code knows exactly what to call at every step.
+
+**Where MCP IS the right pattern (future):**
+- **Brand Triage Agent** (ADS-024): An LLM agent that decides which data sources to query for brand extraction — website scraper MCP, social media MCP, DAM connector MCP. The agent reasons about which tools are relevant for each company.
+- **Prompt Refinement Agent** (V2): An LLM that evaluates generated images against brand guidelines and decides whether to regenerate, adjust prompts, or approve.
+
+### Missing Integration Tickets
+
+Three integration gaps exist between the layers above:
+
+#### ADS-026: Frontend API Client Layer (NEW)
+
+**As a** frontend developer, **I need** a typed fetch wrapper for all API endpoints, **so that** components don't duplicate fetch logic, error handling, or type parsing.
+
+**Why this is missing:** ADS-006 says "Submit → POST to /api/generate" but doesn't specify HOW. Each component would independently write `fetch('/api/generate', ...)` with duplicated error handling, no shared types, and inconsistent timeout handling.
+
+**Acceptance Criteria:**
+- [ ] `lib/api/client.ts` exports typed functions:
+  - `generateCreatives(brief: CampaignBriefInput): Promise<PipelineResult>`
+  - `uploadAsset(file: File, campaignId: string): Promise<{ url: string }>`
+  - `getCampaign(id: string): Promise<PipelineResult>`
+- [ ] Shared error handling: network errors, 400 validation errors, 500 server errors all produce typed `ApiError` objects
+- [ ] Request timeout: `AbortSignal.timeout(55_000)` on generate (leaves 5s buffer vs Vercel 60s)
+- [ ] No duplicate fetch logic in components — all API calls go through this client
+- [ ] Content-Type headers set correctly (JSON for briefs, multipart for file upload)
+
+**Sub-tasks:**
+- [ ] ADS-026a: Define `ApiError` type and error parsing utility
+- [ ] ADS-026b: `generateCreatives()` — POST /api/generate with typed request/response
+- [ ] ADS-026c: `uploadAsset()` — POST /api/upload with File handling
+- [ ] ADS-026d: `getCampaign()` — GET /api/campaigns/[id]
+
+---
+
+#### ADS-027: Shared API Contract Types (NEW)
+
+**As a** developer, **I need** a single source of truth for request/response shapes shared between frontend and backend, **so that** the API contract doesn't drift between what the route returns and what the component expects.
+
+**Why this is missing:** `PipelineResult` lives in `lib/pipeline/types.ts` (domain layer). The frontend needs to consume this type, but importing from the pipeline layer creates a dependency direction violation (UI → Domain is fine, but the import path should be explicit).
+
+**Acceptance Criteria:**
+- [ ] `lib/api/types.ts` exports:
+  - `GenerateRequest` — the JSON body POSTed to /api/generate (matches `CampaignBrief` but without internal-only fields)
+  - `GenerateResponse` — the JSON returned by /api/generate (matches `PipelineResult` serialized)
+  - `ApiError` — `{ code: string; message: string; details?: string[] }`
+  - `UploadResponse` — `{ uploadUrl: string; key: string }`
+  - `CampaignResponse` — same as `GenerateResponse` (retrieved by ID)
+- [ ] Backend API routes use these types for response serialization
+- [ ] Frontend API client uses these types for response parsing
+- [ ] Zod schemas exist for response validation on the frontend (defensive parsing)
+- [ ] No `any` casts — full type safety from route handler → JSON → client → component
+
+---
+
+#### ADS-028: Backend Dependency Injection / Service Setup (NEW)
+
+**As a** backend developer, **I need** a clean way to construct pipeline dependencies (OpenAI client, storage provider) once per request, **so that** API routes don't duplicate setup logic and dependencies are testable.
+
+**Why this is missing:** ADS-005 says "reads OPENAI_API_KEY from env" and "creates storage via createStorage()" but doesn't specify where this lives. If each route creates its own OpenAI client and storage provider, that's duplicated initialization. If env validation happens per-route, it's scattered.
+
+**Acceptance Criteria:**
+- [ ] `lib/api/services.ts` exports:
+  - `getOpenAIClient(): OpenAI` — creates client with validated API key, configured timeout
+  - `getStorage(): StorageProvider` — creates storage via `createStorage()`
+  - `validateRequiredEnv(): void` — Zod-validates all required env vars at once, throws descriptive error
+- [ ] Called once at the top of each API route handler
+- [ ] In tests: mock `getOpenAIClient()` and `getStorage()` to inject test doubles
+- [ ] OpenAI client created with `timeout: 30_000` and `maxRetries: 0` (we handle retries ourselves in `withRetry`)
+
+---
+
+### Updated Dependency Graph (with integration tickets)
+
+```
+                                   ADS-027 (shared API types)
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    ▼                 ▼                  ▼
+              ADS-026            ADS-028             ADS-005
+          (API client)       (service setup)     (API route wiring)
+                │                  │                    │
+                ▼                  ▼                    │
+           ADS-025          ADS-004 (pipeline)         │
+        (usePipelineState)        │                    │
+                │                  │                    │
+     ┌──────────┼──────────┐      │                    │
+     ▼          ▼          ▼      ▼                    ▼
+  ADS-006   ADS-007   ADS-008   ADS-001...003      (routes)
+  (Form)    (Gallery) (Progress)  (pipeline impl)
+```
+
+### Updated Phase 2
+
+```
+Phase 2 — "Make It Impressive" (3 new tickets added)
+  ADS-015  → ADS-027 → ADS-028 → ADS-026 → ADS-025
+  → ADS-006 → ADS-007 → ADS-008 → ADS-011
+```
+
+ADS-027 (types) → ADS-028 (services) → ADS-026 (client) must come before any frontend component, because every component imports the API client which imports the shared types.
