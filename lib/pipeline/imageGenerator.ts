@@ -20,7 +20,9 @@ import type { GeneratedImage, GenerationTask, PipelineError } from "./types";
 import { withRetry, isRetryableOpenAIError } from "./retry";
 
 // PNG magic bytes per spec: 0x89 0x50 0x4E 0x47
-// Inline comparison avoids module-level Buffer allocation.
+// We inline this check in generateImage() via direct byte comparison
+// (see `hasValidPngHeader` below) instead of a module-level Buffer constant.
+// This avoids per-module allocation and matches the test assertion style.
 
 /**
  * Generate a single image via DALL-E 3.
