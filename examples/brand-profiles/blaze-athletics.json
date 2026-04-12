@@ -1,0 +1,53 @@
+{
+  "companyId": "blaze-athletics",
+  "companyName": "BLAZE Athletics",
+  "industry": "Consumer Goods",
+  "subIndustry": "Sports & Outdoor",
+
+  "visual": {
+    "primaryColors": ["#FF3E00", "#0A0A0A"],
+    "secondaryColors": ["#FF6B35", "#FFFFFF", "#1A1A2E"],
+    "colorMood": "bold, explosive, high-energy, unapologetically intense",
+    "photographyStyle": "dynamic action photography with motion blur, sweat, and intensity. Athletes mid-stride, mid-lift, mid-send. Raw, not polished.",
+    "lightingPreference": "dramatic contrast — harsh directional light with deep shadows, stadium/gym lighting feel",
+    "compositionNotes": "Product is secondary to the athlete's moment. Show the product being used in extreme conditions — mud, rain, UV exposure. Never sterile.",
+    "avoidVisuals": ["gentle/calm imagery", "pastel colors", "studio product shots", "smiling-at-camera poses", "anything that looks like a spa"]
+  },
+
+  "typography": {
+    "headlineFont": "Oswald",
+    "bodyFont": "Roboto Condensed",
+    "fontUrl": null,
+    "textTransform": "uppercase",
+    "overlayStyle": "knockout"
+  },
+
+  "voice": {
+    "brandPersonality": "intense, direct, no-nonsense coach who respects your dedication and pushes you harder",
+    "toneModifiers": ["aggressive", "motivational", "authentic", "zero-BS"],
+    "avoidLanguage": ["gentle", "delicate", "soothing", "pamper", "relax", "luxury", "affordable"],
+    "tagline": "OUTLAST EVERYTHING."
+  },
+
+  "compliance": {
+    "prohibitedTerms": ["guaranteed results", "clinically proven performance", "endorsed by", "FDA approved"],
+    "requiredDisclaimer": "Reapply every 2 hours and after swimming or sweating.",
+    "competitorNames": ["Nike", "Under Armour", "Adidas", "The North Face"],
+    "regulatoryRegions": ["US-FDA", "EU-Cosmetics", "AU-TGA"]
+  },
+
+  "platformOverrides": {
+    "instagram": {
+      "tone": "hype, community challenges, athlete spotlights",
+      "visualStyle": "high-contrast reels aesthetic, dark backgrounds"
+    },
+    "tiktok": {
+      "tone": "raw behind-the-scenes, 'watch this' energy, training montages",
+      "visualStyle": "handheld/POV angles, sweat close-ups, product durability tests"
+    },
+    "facebook": {
+      "tone": "community events, race results, team stories",
+      "visualStyle": "event photography, group shots, before/after race"
+    }
+  }
+}

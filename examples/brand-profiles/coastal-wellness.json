@@ -1,0 +1,53 @@
+{
+  "companyId": "coastal-wellness",
+  "companyName": "Coastal Wellness Co.",
+  "industry": "Consumer Health",
+  "subIndustry": "Sun Care & Skincare",
+
+  "visual": {
+    "primaryColors": ["#1B6B93", "#FAFAFA"],
+    "secondaryColors": ["#7EC8E3", "#F4E4C1", "#E8D5B7"],
+    "colorMood": "calm, coastal, premium but approachable",
+    "photographyStyle": "lifestyle outdoor photography with real people in natural coastal settings — beaches, boardwalks, gardens. Product shown in context of use, never isolated on white.",
+    "lightingPreference": "warm natural golden-hour sunlight with soft shadows",
+    "compositionNotes": "Always show the product being used or just-used — in someone's hand, on a beach towel, beside a sunhat. Environment tells the story.",
+    "avoidVisuals": ["clinical/lab settings", "stock photo feel", "indoor studio shots", "overly saturated neon colors", "competitor product resemblance"]
+  },
+
+  "typography": {
+    "headlineFont": "DM Sans",
+    "bodyFont": "Inter",
+    "fontUrl": null,
+    "textTransform": "capitalize",
+    "overlayStyle": "gradient"
+  },
+
+  "voice": {
+    "brandPersonality": "warm, knowledgeable, like a trusted friend who also happens to be a dermatologist",
+    "toneModifiers": ["confident", "caring", "science-backed but not clinical"],
+    "avoidLanguage": ["cheap", "discount", "chemical-free", "miracle", "anti-aging", "flawless"],
+    "tagline": "Live in the sun. Trust your skin."
+  },
+
+  "compliance": {
+    "prohibitedTerms": ["SPF 100", "blocks all UV", "prevents cancer", "chemical-free", "all-natural sunscreen"],
+    "requiredDisclaimer": null,
+    "competitorNames": ["Neutrogena", "Coppertone", "Banana Boat", "Sun Bum"],
+    "regulatoryRegions": ["US-FDA", "EU-Cosmetics"]
+  },
+
+  "platformOverrides": {
+    "instagram": {
+      "tone": "aspirational lifestyle, warm community feel",
+      "visualStyle": "bright, airy, UGC-adjacent aesthetic"
+    },
+    "tiktok": {
+      "tone": "casual, educational, 'did you know?' hooks",
+      "visualStyle": "close-up product textures, application demos"
+    },
+    "linkedin": {
+      "tone": "professional, sustainability-focused, B2B partnerships",
+      "visualStyle": "clean product hero shots with stats overlay"
+    }
+  }
+}

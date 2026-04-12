@@ -1,0 +1,36 @@
+{
+  "campaign": {
+    "id": "summer-2026-suncare",
+    "name": "Summer Sun Protection 2026",
+    "message": "Stay Protected All Summer — Now 20% Off",
+    "targetRegion": "North America",
+    "targetAudience": "Health-conscious adults 25-45, outdoor enthusiasts, parents with young children",
+    "tone": "vibrant, trustworthy, active lifestyle",
+    "season": "summer"
+  },
+  "products": [
+    {
+      "name": "SPF 50 Mineral Sunscreen",
+      "slug": "spf-50-sunscreen",
+      "description": "Reef-safe mineral sunscreen with zinc oxide, broad spectrum SPF 50, water-resistant 80 minutes",
+      "category": "sun protection",
+      "keyFeatures": ["reef-safe", "mineral formula", "water-resistant", "broad spectrum"],
+      "color": "#F4A261",
+      "existingAsset": null
+    },
+    {
+      "name": "After-Sun Cooling Aloe Gel",
+      "slug": "after-sun-aloe-gel",
+      "description": "Organic aloe vera gel with vitamin E and cucumber extract for post-sun skin recovery",
+      "category": "after-sun care",
+      "keyFeatures": ["organic aloe vera", "vitamin E", "cooling formula", "fragrance-free"],
+      "color": "#2A9D8F",
+      "existingAsset": null
+    }
+  ],
+  "aspectRatios": ["1:1", "9:16", "16:9"],
+  "outputFormats": {
+    "creative": "png",
+    "thumbnail": "webp"
+  }
+}
