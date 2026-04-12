@@ -16,7 +16,13 @@ import type { StorageProvider } from "@/lib/pipeline/types";
 
 export interface RequestContext {
   requestId: string;
-  startedAt: number;
+  /**
+   * High-resolution timestamp from `performance.now()` at request start.
+   * Monotonic, relative to process start — NOT a wall-clock epoch time.
+   * Use only for intra-request duration math: `performance.now() - startedAtPerfMs`.
+   * Do NOT serialize as a timestamp or send to external systems expecting epoch ms.
+   */
+  startedAtPerfMs: number;
 }
 
 /**
@@ -44,6 +50,6 @@ export function getStorage(): StorageProvider {
 export function createRequestContext(): RequestContext {
   return {
     requestId: crypto.randomUUID(),
-    startedAt: performance.now(),
+    startedAtPerfMs: performance.now(),
   };
 }
