@@ -53,3 +53,41 @@ export function createRequestContext(): RequestContext {
     startedAtPerfMs: performance.now(),
   };
 }
+
+/**
+ * Validate all required environment variables at route entry.
+ * Fails fast with a descriptive error listing every missing variable
+ * at once, rather than surfacing them one at a time during execution.
+ *
+ * Throws a `MissingConfigurationError` that API routes catch and map
+ * to HTTP 500 with `MISSING_CONFIGURATION` code.
+ */
+export function validateRequiredEnv(): void {
+  const missing: string[] = [];
+
+  if (!process.env.OPENAI_API_KEY) {
+    missing.push("OPENAI_API_KEY");
+  }
+
+  // S3 vars are only required when STORAGE_MODE=s3
+  if (process.env.STORAGE_MODE === "s3" && !process.env.S3_BUCKET) {
+    missing.push("S3_BUCKET (required when STORAGE_MODE=s3)");
+  }
+
+  if (missing.length > 0) {
+    throw new MissingConfigurationError(
+      `Missing required environment variables: ${missing.join(", ")}`
+    );
+  }
+}
+
+/**
+ * Thrown when required env vars are missing.
+ * API routes catch this and map to 500 INTERNAL_ERROR / MISSING_CONFIGURATION.
+ */
+export class MissingConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MissingConfigurationError";
+  }
+}
