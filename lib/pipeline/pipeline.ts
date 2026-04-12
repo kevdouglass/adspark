@@ -114,6 +114,7 @@ export async function runPipeline(
       errors: parseResult.errors.map(
         (message): PipelineError => ({
           stage: VALIDATION_ERROR_STAGE,
+          cause: "invalid_input",
           message,
           retryable: false,
         })
@@ -156,6 +157,7 @@ export async function runPipeline(
   } catch (e) {
     allErrors.push({
       stage: "validating",
+      cause: "invalid_input",
       message: `Failed to build generation tasks: ${e instanceof Error ? e.message : "unknown"}`,
       retryable: false,
     });
@@ -210,6 +212,7 @@ export async function runPipeline(
   if (elapsedAfterGeneration > PIPELINE_TIMEOUT_BUDGET_MS) {
     allErrors.push({
       stage: "generating",
+      cause: "upstream_timeout",
       message: `Pipeline timeout budget exceeded (${elapsedAfterGeneration}ms > ${PIPELINE_TIMEOUT_BUDGET_MS}ms). Returning partial results without compositing/organizing.`,
       retryable: true,
     });
@@ -302,6 +305,7 @@ async function compositeCreatives(
         product: image.task.product.slug,
         aspectRatio: image.task.aspectRatio,
         stage: "compositing",
+        cause: "processing_error",
         message:
           result.reason instanceof Error
             ? result.reason.message
@@ -387,6 +391,7 @@ function toPipelineError(systemError: {
 }): PipelineError {
   return {
     stage: systemError.stage as PipelineError["stage"],
+    cause: "storage_error",
     message: systemError.message,
     retryable: systemError.retryable,
   };
