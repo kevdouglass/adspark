@@ -92,6 +92,26 @@ const DEFAULT_MOOD =
   "clean, professional studio lighting with a modern minimalist background";
 
 // ---------------------------------------------------------------------------
+// Lifestyle category keywords (drives the face-policy branch in Layer 5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Categories whose marketing benefits from people in the scene (with the
+ * product still as the hero). Matched as case-insensitive substrings against
+ * `product.category`, so "skincare serum" and "running sportswear" both
+ * trigger lifestyle routing — not just the bare keyword.
+ *
+ * Hoisted to module scope so the array is allocated once, not per call.
+ */
+const LIFESTYLE_CATEGORY_KEYWORDS = [
+  "sun protection",
+  "skincare",
+  "sportswear",
+  "fitness",
+  "outdoor",
+] as const;
+
+// ---------------------------------------------------------------------------
 // Core prompt construction
 // ---------------------------------------------------------------------------
 
@@ -135,7 +155,16 @@ export function buildPrompt(
   const colorHint = product.color
     ? ` The product's brand color palette is ${product.color}.`
     : "";
-  const subject = `A premium ${product.category} product: ${product.name}. ${product.description}.${featuresHint}${colorHint}`;
+  // WHY strip trailing punctuation from description: the template appends a
+  // period after `${descriptionText}` to start the next sentence cleanly.
+  // Marketer-authored descriptions almost always already end with `.` (or
+  // occasionally `!`/`?`), which would otherwise produce a double period
+  // ("...Portland.. Key features:") visible in every committed prompt
+  // artifact and every live DALL-E call. The regex strips trailing `.!?`
+  // runs and any whitespace before them; an unpunctuated description is
+  // a no-op.
+  const descriptionText = product.description.replace(/[.!?]+\s*$/, "");
+  const subject = `A premium ${product.category} product: ${product.name}. ${descriptionText}.${featuresHint}${colorHint}`;
 
   // Layer 2: Context — derived from campaign.targetAudience, campaign.targetRegion, campaign.tone, season
   const context = `Designed for ${campaign.targetAudience} in ${campaign.targetRegion}. The mood is ${campaign.tone}. Setting: ${mood}.`;
@@ -156,8 +185,15 @@ export function buildPrompt(
   // WHY configurable faces: Product-only shots (no faces) work well for packaged
   // goods, but lifestyle categories (sunscreen, sportswear) benefit from people
   // in the scene. The category drives this decision.
-  const isLifestyleCategory = ["sun protection", "skincare", "sportswear", "fitness", "outdoor"].includes(
-    product.category.toLowerCase()
+  //
+  // WHY substring match (not exact equality): real marketer category labels are
+  // rarely the bare keyword. A skincare brand will use "skincare serum",
+  // "skincare cream", or "moisturizer"; a sportswear brand will use "running
+  // sportswear" or similar. Exact equality would only match the bare keyword
+  // and silently miss every realistic category label. The substring check
+  // hits both the bare keyword and all common compound forms.
+  const isLifestyleCategory = LIFESTYLE_CATEGORY_KEYWORDS.some((keyword) =>
+    product.category.toLowerCase().includes(keyword)
   );
   const faceGuidance = isLifestyleCategory
     ? "People may appear naturally in the scene but should not be the primary focus — the product remains the hero."

@@ -18,6 +18,9 @@ tsconfig.tsbuildinfo
 .env.local
 .env.*.local
 
+# AWS local config (cors.json, scratch policies)
+.aws/
+
 # Review reports (generated, not committed)
 .review-reports/PR-*.html
 .review-reports/pr-findings/pr-*.json

@@ -1,0 +1,32 @@
+{
+  "campaign": {
+    "id": "ember-roast-fall-launch",
+    "name": "Ember Roast — Fall Single-Origin Launch",
+    "message": "Roasted slow. Drink it slower.",
+    "targetRegion": "Pacific Northwest",
+    "targetAudience": "Specialty coffee enthusiasts 28-45, craft-focused, appreciate origin storytelling and small-batch roasters",
+    "tone": "warm, artisanal, intimate, slow-living, golden-hour cinematic",
+    "season": "fall"
+  },
+  "products": [
+    {
+      "name": "Ember Roast — Ethiopia Yirgacheffe",
+      "slug": "ember-yirgacheffe",
+      "description": "Small-batch single-origin from the Yirgacheffe region. Bright citrus, jasmine florals, honey finish. Roasted weekly in Portland.",
+      "category": "specialty coffee",
+      "keyFeatures": [
+        "single-origin Ethiopia",
+        "small-batch roasted weekly",
+        "tasting notes: citrus, jasmine, honey",
+        "compostable bag"
+      ],
+      "color": "#6B3410",
+      "existingAsset": null
+    }
+  ],
+  "aspectRatios": ["1:1", "9:16", "16:9"],
+  "outputFormats": {
+    "creative": "png",
+    "thumbnail": "webp"
+  }
+}
