@@ -34,11 +34,19 @@ export function createStorage(config: StorageConfig = readEnvConfig()): StorageP
   );
 }
 
+const VALID_STORAGE_MODES = ["s3", "local"] as const;
+
 function readEnvConfig(): StorageConfig {
+  const rawMode = process.env.STORAGE_MODE ?? "local";
+  const mode = VALID_STORAGE_MODES.includes(rawMode as StorageConfig["mode"])
+    ? (rawMode as StorageConfig["mode"])
+    : (() => { throw new Error(`Invalid STORAGE_MODE: "${rawMode}". Must be one of: ${VALID_STORAGE_MODES.join(", ")}`); })();
+
   return {
-    mode: (process.env.STORAGE_MODE as "s3" | "local") ?? "local",
+    mode,
     s3Bucket: process.env.S3_BUCKET,
     s3Region: process.env.S3_REGION ?? "us-east-1",
     localOutputDir: process.env.LOCAL_OUTPUT_DIR ?? "./output",
+    localUrlBase: process.env.LOCAL_URL_BASE ?? "/api/files",
   };
 }
