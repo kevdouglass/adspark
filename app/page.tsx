@@ -1,24 +1,66 @@
+/**
+ * Dashboard — AdSpark's only page.
+ *
+ * Firefly-style layout: narrow sidebar hosting the BriefForm on the
+ * left, wide canvas hosting the PipelineProgress + CreativeGallery
+ * on the right. Single-column stacked layout on mobile (<1024px).
+ *
+ * This page is marked `"use client"` because the entire dashboard tree
+ * consumes the PipelineStateProvider context. See ADR-007 for the full
+ * rationale on why the page is a client component rather than a server
+ * component with a client wrapper.
+ */
+
+"use client";
+
+import { AppProviders } from "@/components/providers/AppProviders";
+import { BriefForm } from "@/components/BriefForm";
+import { PipelineProgress } from "@/components/PipelineProgress";
+import { CreativeGallery } from "@/components/CreativeGallery";
+
 export default function Home() {
   return (
-    <main className="min-h-screen bg-gray-950 text-white">
-      <div className="max-w-7xl mx-auto px-4 py-12">
-        <header className="mb-12">
-          <h1 className="text-4xl font-bold tracking-tight">
-            AdSpark
-          </h1>
-          <p className="mt-2 text-lg text-gray-400">
-            Creative Automation for Social Ad Campaigns
-          </p>
-        </header>
+    <AppProviders>
+      <div className="flex min-h-screen flex-col bg-[var(--bg)] lg:flex-row">
+        {/* ----------------------------------------------------------- */}
+        {/* Sidebar — 300px fixed, hosts the BriefForm                   */}
+        {/* ----------------------------------------------------------- */}
+        <aside className="w-full border-b border-[var(--border)] bg-[var(--bg)] lg:w-[340px] lg:flex-shrink-0 lg:border-b-0 lg:border-r">
+          <div className="flex h-full flex-col">
+            {/* Brand header */}
+            <header className="border-b border-[var(--border)] px-6 py-5">
+              <div className="flex items-center gap-2">
+                <span
+                  aria-hidden="true"
+                  className="inline-block h-3 w-3 rounded-full"
+                  style={{ background: "var(--accent-gradient)" }}
+                />
+                <h1 className="text-lg font-semibold tracking-tight text-[var(--ink)]">
+                  AdSpark
+                </h1>
+              </div>
+              <p className="mt-1 text-xs text-[var(--ink-muted)]">
+                Creative Automation for Social Ad Campaigns
+              </p>
+            </header>
 
-        {/* TODO: BriefForm, CreativeGallery, PipelineProgress, D3Charts */}
-        <section className="rounded-xl border border-gray-800 bg-gray-900 p-8">
-          <p className="text-gray-500">
-            Pipeline dashboard coming soon. Upload a campaign brief to generate
-            ad creatives across 3 aspect ratios.
-          </p>
-        </section>
+            {/* Form — scrollable within the sidebar */}
+            <div className="flex-1 overflow-y-auto px-6 py-5">
+              <BriefForm />
+            </div>
+          </div>
+        </aside>
+
+        {/* ----------------------------------------------------------- */}
+        {/* Canvas — wide area hosting progress + gallery                */}
+        {/* ----------------------------------------------------------- */}
+        <main className="flex-1 bg-[var(--surface)] p-6 lg:p-8">
+          <div className="mx-auto flex max-w-5xl flex-col gap-6">
+            <PipelineProgress />
+            <CreativeGallery />
+          </div>
+        </main>
       </div>
-    </main>
+    </AppProviders>
   );
 }
