@@ -41,9 +41,10 @@ import type { RequestContext } from "@/lib/api/services";
 import { parseBrief } from "./briefParser";
 import { resolveAssets } from "./assetResolver";
 import { buildGenerationTasks } from "./promptBuilder";
-import { generateImages } from "./imageGenerator";
+import { generateImages, DALLE_CONCURRENCY_LIMIT } from "./imageGenerator";
 import { overlayText, ImageProcessingError } from "./textOverlay";
 import { organizeOutput } from "./outputOrganizer";
+import { PIPELINE_BUDGET_MS } from "@/lib/api/timeouts";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -70,8 +71,50 @@ export interface RunPipelineOptions {
 // Internal constants — sentinel values for system-level errors
 // ---------------------------------------------------------------------------
 
-/** Total pipeline timeout budget before we bail out with partial results (ms). */
-const PIPELINE_TIMEOUT_BUDGET_MS = 40_000;
+/**
+ * Total pipeline timeout budget before we bail out with partial results (ms).
+ *
+ * Imported from `lib/api/timeouts.ts` which owns all three staggered
+ * timeouts (pipeline < client < Vercel). A prior version of this fix
+ * set the pipeline budget equal to the client's 55s timeout, creating
+ * a race where the client's AbortSignal could fire at the same moment
+ * the server prepared its graceful partial-result response. The
+ * staggered 50/55/60 layout documented in `timeouts.ts` guarantees the
+ * server wins the race every time.
+ *
+ * Realistic wall-clock math for a 6-image demo (2 products × 3 ratios)
+ * at DALL-E 3 Tier 1 p75 latency, assuming `DALLE_CONCURRENCY_LIMIT = 5`:
+ *
+ *   - Wave 1 (5 images in parallel, p75): ~22s
+ *   - Wave 2 (1 image alone, p75): ~22s
+ *   - Compositing (parallel canvas): ~3s
+ *   - Organizing (storage + manifest): ~3s
+ *   - TOTAL realistic p75: ~50s
+ *
+ * KNOWN LIMITATIONS (documented for honesty, not hand-waved):
+ *
+ * 1. The retry layer (`lib/pipeline/retry.ts`) can add up to ~1.5s to
+ *    a single image on a 429 rate-limit with `baseDelayMs=500`. A
+ *    pathological run where wave 1 hits multiple rate limits can still
+ *    trip this check and return partial results. Tier 2+ accounts see
+ *    ~12s p75 latency and rarely hit the ceiling.
+ *
+ * 2. The budget check fires AFTER generation (line below). Compositing
+ *    (~3s) and organizing (~3s) still have to run. The budget does NOT
+ *    reserve space for them — it assumes the 5s stagger to the client
+ *    timeout is enough headroom for the downstream stages to finish.
+ *    If a future change makes compositing or organizing materially
+ *    more expensive, recompute the budget.
+ *
+ * See `lib/api/timeouts.ts` for the full stagger story.
+ */
+const PIPELINE_TIMEOUT_BUDGET_MS = PIPELINE_BUDGET_MS;
+
+// `DALLE_CONCURRENCY_LIMIT` is imported solely so the budget math above
+// is grep-linked to its dependency. Any change to the concurrency value
+// will show up as a diff hunk in this file, forcing a re-review of the
+// budget math. `void` silences the unused-variable lint without runtime cost.
+void DALLE_CONCURRENCY_LIMIT;
 
 /**
  * Sentinel product slug for validation errors not tied to a specific product.

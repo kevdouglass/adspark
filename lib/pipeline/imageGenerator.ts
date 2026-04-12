@@ -120,10 +120,21 @@ export async function generateImage(
 }
 
 /**
+ * Default parallelism for DALL-E 3 image generation.
+ *
+ * Calibrated for OpenAI Tier 1, which allows ~5 images/min. Raising
+ * this risks a 429 on the Nth call; lowering it serializes work and
+ * breaks the pipeline timeout budget math in `lib/api/timeouts.ts`
+ * (which assumes wave 1 runs 5 images in parallel). Any change here
+ * MUST be re-reconciled with `PIPELINE_BUDGET_MS`.
+ */
+export const DALLE_CONCURRENCY_LIMIT = 5;
+
+/**
  * Generate images for all tasks in parallel with concurrency limiting.
  *
- * Uses p-limit(5) to respect OpenAI Tier 1 rate limits (5 img/min).
- * Uses Promise.allSettled so one failure doesn't kill the entire batch.
+ * Uses p-limit(DALLE_CONCURRENCY_LIMIT) to respect OpenAI Tier 1 rate
+ * limits. Uses Promise.allSettled so one failure doesn't kill the batch.
  *
  * Returns both successful images AND typed errors for failed ones —
  * the caller (pipeline orchestrator) decides how to surface partial failures.
@@ -131,7 +142,7 @@ export async function generateImage(
 export async function generateImages(
   tasks: GenerationTask[],
   client: OpenAI,
-  concurrency: number = 5
+  concurrency: number = DALLE_CONCURRENCY_LIMIT
 ): Promise<{ images: GeneratedImage[]; errors: PipelineError[] }> {
   const limit = pLimit(concurrency);
 

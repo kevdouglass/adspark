@@ -2,6 +2,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import OpenAI from "openai";
 import sharp from "sharp";
 import { runPipeline } from "@/lib/pipeline/pipeline";
+import {
+  PIPELINE_BUDGET_MS,
+  CLIENT_REQUEST_TIMEOUT_MS,
+  SERVERLESS_EXECUTION_BUDGET_MS,
+} from "@/lib/api/timeouts";
 import type {
   CampaignBrief,
   PipelineStage,
@@ -355,5 +360,38 @@ describe("runPipeline", () => {
         error.message.toLowerCase().includes("content policy")
     );
     expect(contentPolicyErrors.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timeout stagger invariant
+//
+// The three-layer timeout stack (pipeline < client < Vercel) must always be
+// strictly ordered. If any future refactor flattens them, the race described
+// in `lib/api/timeouts.ts` reappears — the client's AbortSignal could fire at
+// the same moment as the server's graceful partial-result response, so the
+// UI would see an opaque AbortError instead of a structured ApiError with a
+// requestId. These assertions are the runtime guard that JSDoc promises.
+// ---------------------------------------------------------------------------
+
+describe("timeout stagger invariant", () => {
+  it("pipeline budget is strictly less than client timeout", () => {
+    expect(PIPELINE_BUDGET_MS).toBeLessThan(CLIENT_REQUEST_TIMEOUT_MS);
+  });
+
+  it("client timeout is strictly less than Vercel's serverless ceiling", () => {
+    expect(CLIENT_REQUEST_TIMEOUT_MS).toBeLessThan(
+      SERVERLESS_EXECUTION_BUDGET_MS
+    );
+  });
+
+  it("each layer keeps at least 2s of headroom above the one below", () => {
+    // 2s is the floor that prevents scheduling jitter from eating the
+    // stagger (p-limit tick + event loop drift can burn ~hundreds of ms).
+    // The current layout (50/55/60) has 5s per step — well above the floor.
+    expect(CLIENT_REQUEST_TIMEOUT_MS - PIPELINE_BUDGET_MS).toBeGreaterThanOrEqual(2_000);
+    expect(
+      SERVERLESS_EXECUTION_BUDGET_MS - CLIENT_REQUEST_TIMEOUT_MS
+    ).toBeGreaterThanOrEqual(2_000);
   });
 });
