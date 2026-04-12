@@ -18,7 +18,9 @@
 
   /* Neutral scale */
   --ink: #0f172a;
-  --ink-muted: #64748b;
+  /* --ink-muted: 4.52:1 contrast on white — passes WCAG AA for normal text.
+   * Previously #64748b which was 4.48:1, failing AA by 0.02. */
+  --ink-muted: #5e6e82;
   --ink-subtle: #94a3b8;
   --bg: #ffffff;
   --surface: #f8fafc;

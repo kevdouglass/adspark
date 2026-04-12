@@ -42,12 +42,27 @@ export const DALLE_CONCURRENCY_LIMIT = 5;
 
 /**
  * Retry base delay (ms). Exponential backoff: attempt 1 fail → wait
- * 500ms, attempt 2 fail → wait 1000ms, attempt 3 → throw without delay.
- * Worst-case adds ~1.5s to a single image on a 429 rate-limit, vs ~3s
- * at the prior 1000ms base. Keeps retries cheap enough to not blow the
- * 50s pipeline budget on a handful of rate-limited calls.
+ * 12s, attempt 2 fail → wait 24s, attempt 3 → throw.
+ *
+ * **Why 12 seconds and not 500ms:** OpenAI DALL-E 3 Tier 1 returns 429
+ * with a `Retry-After` header that is typically 12-60 seconds (one
+ * rate-limit bucket refill). At the previous 500ms base, both retries
+ * fired *inside* the rate-limit window, generated two more 429s, and
+ * exhausted all retries in ~1.5s — making the retry logic effectively
+ * cosmetic against real Tier 1 rate spikes. 12s clears the typical
+ * Retry-After window on the first retry.
+ *
+ * Trade-off: a 429 followed by one retry now costs ~12s of pipeline
+ * budget instead of ~0.5s. With `PIPELINE_BUDGET_MS = 50_000`, a
+ * worst-case scenario is one image hitting two retries (~36s wall
+ * time) inside the 50s budget — tight but survivable. Most demo runs
+ * will not hit any retries and pay zero overhead.
+ *
+ * If you observe sustained 429 cascades on Tier 1, the right move is
+ * to lower `DALLE_CONCURRENCY_LIMIT` from 5 to 3, not to lower this
+ * delay — sleeping less just guarantees more 429s.
  */
-export const DALLE_RETRY_BASE_DELAY_MS = 500;
+export const DALLE_RETRY_BASE_DELAY_MS = 12_000;
 
 /**
  * Classify an upstream error into a typed PipelineErrorCause.

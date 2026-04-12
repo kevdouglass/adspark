@@ -46,9 +46,13 @@ import { buildApiError, sanitizeErrorMessage } from "@/lib/api/errors";
 import type { ApiError } from "@/lib/api/errors";
 import type { GenerateRequestBody } from "@/lib/api/types";
 import { orchestrateBrief } from "@/lib/ai/agents";
+import { ORCHESTRATE_BUDGET_MS } from "@/lib/api/timeouts";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_PROMPT_CHARS = 1000;
+
+/** Sentinel thrown by the timeout race so the catch block can disambiguate. */
+const ORCHESTRATION_TIMEOUT_SENTINEL = "orchestration_timeout";
 
 async function readBodyWithLimit(
   request: Request,
@@ -230,12 +234,23 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // Race the orchestration against ORCHESTRATE_BUDGET_MS so a slow
+  // OpenAI call can never run past Vercel's 60s function guillotine.
+  // Without this guard, a hung reviewer call would let the function get
+  // hard-killed by the platform and return no JSON envelope, no
+  // requestId — the client would see an opaque AbortError instead of a
+  // typed UPSTREAM_TIMEOUT 504. See `lib/api/timeouts.ts`.
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
-    const orchestration = await orchestrateBrief(
-      client,
-      userPrompt,
-      existingBrief
-    );
+    const orchestration = await Promise.race([
+      orchestrateBrief(client, userPrompt, existingBrief),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(ORCHESTRATION_TIMEOUT_SENTINEL)),
+          ORCHESTRATE_BUDGET_MS
+        );
+      }),
+    ]);
     return NextResponse.json(
       {
         brief: orchestration.brief,
@@ -247,18 +262,30 @@ export async function POST(request: Request): Promise<Response> {
       { status: 200 }
     );
   } catch (error) {
+    const isTimeout =
+      error instanceof Error &&
+      error.message === ORCHESTRATION_TIMEOUT_SENTINEL;
     console.error(
-      `[${ctx.requestId}] Orchestration failed:`,
+      `[${ctx.requestId}] Orchestration ${isTimeout ? "timed out" : "failed"}:`,
       error
     );
+    // No `details` parameter on the response below — raw error.message is
+    // logged server-side with the requestId above. Leaking it to the client
+    // would expose OpenAI SDK internals (model names, quota context, and
+    // occasional partial request payloads).
     return NextResponse.json(
       buildApiError(
-        "UPSTREAM_ERROR",
-        "Brief orchestration failed. Please try rephrasing your description or try again.",
-        ctx.requestId,
-        error instanceof Error ? [error.message] : undefined
+        isTimeout ? "UPSTREAM_TIMEOUT" : "UPSTREAM_ERROR",
+        isTimeout
+          ? "Brief orchestration timed out. Please try a shorter description or submit the form as-is."
+          : "Brief orchestration failed. Please try rephrasing your description or try again.",
+        ctx.requestId
       ) satisfies ApiError,
-      { status: 502 }
+      { status: isTimeout ? 504 : 502 }
     );
+  } finally {
+    // Always clear the timeout handle so the timer doesn't keep the
+    // serverless function alive past the response on the happy path.
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 }

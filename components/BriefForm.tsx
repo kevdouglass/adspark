@@ -51,6 +51,7 @@ import {
   type OrchestrationPhase,
 } from "@/components/BriefGeneratorAI";
 import type { ApiError } from "@/lib/api/errors";
+import { ORCHESTRATE_CLIENT_TIMEOUT_MS } from "@/lib/api/timeouts";
 
 const ASPECT_RATIOS: AspectRatio[] = ["1:1", "9:16", "16:9"];
 const CAMPAIGN_MESSAGE_MAX = 140;
@@ -168,6 +169,11 @@ export function BriefForm() {
     ];
 
     try {
+      // 50s client timeout — staggered 5s above the server's
+      // ORCHESTRATE_BUDGET_MS so the server's graceful 504 always wins
+      // the race. Without this, a hung server could let the browser
+      // hang indefinitely waiting for a response that never comes.
+      // See lib/api/timeouts.ts for the cascade.
       const response = await fetch("/api/orchestrate-brief", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -175,6 +181,7 @@ export function BriefForm() {
           prompt,
           existingBrief: formState,
         }),
+        signal: AbortSignal.timeout(ORCHESTRATE_CLIENT_TIMEOUT_MS),
       });
 
       phaseTimers.forEach(clearTimeout);

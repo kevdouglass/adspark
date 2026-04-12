@@ -164,7 +164,7 @@ const BRIEF_SCHEMA_BLOCK = `{
     "targetRegion": "Geographic region",
     "targetAudience": "Specific audience description",
     "tone": "3-4 comma-separated adjectives",
-    "season": "spring" | "summer" | "fall" | "winter"
+    "season": "<one of: spring|summer|fall|winter>"
   },
   "products": [
     {

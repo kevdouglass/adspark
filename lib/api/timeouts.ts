@@ -90,3 +90,31 @@ export const CLIENT_REQUEST_TIMEOUT_MS = 55_000;
  * 60s cap via the Pro plan (300s limit) or streaming responses.
  */
 export const PIPELINE_BUDGET_MS = 50_000;
+
+/**
+ * Server-side budget for the multi-agent brief orchestration endpoint
+ * (`/api/orchestrate-brief`).
+ *
+ * Typical wall time is ~10-12s (triage ~2s + draft ~3s + 4 parallel
+ * reviewers ~3s + synthesis ~3s). 45s gives ~3-4x headroom at Tier 1
+ * p99 while staying comfortably under Vercel's 60s guillotine.
+ *
+ * The orchestration runs BEFORE the pipeline on a SEPARATE POST call,
+ * so it has its own staggered budget independent of `PIPELINE_BUDGET_MS`.
+ * Without this guard, a slow OpenAI call could let the function hang
+ * until Vercel's 60s hard kill, returning no JSON envelope and no
+ * `requestId` — the client would see an opaque AbortError instead
+ * of a structured `UPSTREAM_TIMEOUT` 504.
+ *
+ * Caller wraps `orchestrateBrief()` in `Promise.race` against a
+ * `setTimeout` reject so the typed error path always wins.
+ */
+export const ORCHESTRATE_BUDGET_MS = 45_000;
+
+/**
+ * Client-side fetch timeout for `/api/orchestrate-brief`. 5s above the
+ * server budget so the server's graceful 504 (`UPSTREAM_TIMEOUT`) always
+ * wins the race against the client's `AbortSignal.timeout` — same stagger
+ * pattern as `PIPELINE_BUDGET_MS` ↔ `CLIENT_REQUEST_TIMEOUT_MS`.
+ */
+export const ORCHESTRATE_CLIENT_TIMEOUT_MS = 50_000;
