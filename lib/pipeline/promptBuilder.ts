@@ -118,13 +118,24 @@ export function buildPrompt(
   // defensive fallback for direct function callers bypassing validation.
   const mood = SEASONAL_MOODS[campaign.season] ?? DEFAULT_MOOD;
   const composition = COMPOSITION_GUIDANCE[aspectRatio];
-  const features = product.keyFeatures.join(", ");
 
   // Layer 1: Subject — derived from product.name, product.description, product.keyFeatures, product.color
+  //
+  // WHY guard empty keyFeatures: an empty array would produce "Key features: ."
+  // which is a malformed sentence that could confuse DALL-E. Zod validation
+  // requires min(1), but we guard defensively for direct callers bypassing the
+  // boundary — the same defensive stance as the DEFAULT_MOOD fallback above.
+  const featuresHint =
+    product.keyFeatures.length > 0
+      ? ` Key features: ${product.keyFeatures.join(", ")}.`
+      : "";
+  // WHY guard empty color: same defensive stance — empty string would produce
+  // "brand color palette is ." The Product type declares color as string (not
+  // nullable), but we guard for callers passing an empty string.
   const colorHint = product.color
     ? ` The product's brand color palette is ${product.color}.`
     : "";
-  const subject = `A premium ${product.category} product: ${product.name}. ${product.description}. Key features: ${features}.${colorHint}`;
+  const subject = `A premium ${product.category} product: ${product.name}. ${product.description}.${featuresHint}${colorHint}`;
 
   // Layer 2: Context — derived from campaign.targetAudience, campaign.targetRegion, campaign.tone, season
   const context = `Designed for ${campaign.targetAudience} in ${campaign.targetRegion}. The mood is ${campaign.tone}. Setting: ${mood}.`;

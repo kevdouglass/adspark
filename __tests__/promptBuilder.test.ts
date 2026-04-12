@@ -4,10 +4,10 @@
  * Quinn Frampton (Adobe, Round 1): "Show us in your code where the prompt
  * is generated." These tests are the proof for every claim in promptBuilder's
  * JSDoc — they demonstrate that the prompt is template-based, auditable,
- * aspect-ratio-aware, and category-aware.
+ * deterministic, aspect-ratio-aware, and category-aware.
  *
  * When an evaluator asks "How do you know the prompt is correct?", the
- * answer is "Here are 30 tests that prove every transformation."
+ * answer is "Here are 40+ tests that prove every transformation."
  */
 
 import { describe, it, expect } from "vitest";
@@ -16,9 +16,8 @@ import type {
   AspectRatio,
   Campaign,
   Product,
-  Season,
 } from "@/lib/pipeline/types";
-import { ASPECT_RATIO_CONFIG, VALID_SEASONS } from "@/lib/pipeline/types";
+import { VALID_SEASONS } from "@/lib/pipeline/types";
 
 // ---------------------------------------------------------------------------
 // Test fixtures — valid campaign + products used across multiple tests
@@ -104,7 +103,13 @@ describe("buildPrompt — field injection from brief", () => {
   });
 
   it("assembles all 5 layers in the correct order: subject → context → layout → style → exclusions", () => {
-    const prompt = buildPrompt(createProduct(), createCampaign(), "1:1");
+    // FINDING #10 fix: pin category explicitly so a future default-category
+    // change in createProduct() doesn't silently break the sentinel.
+    const prompt = buildPrompt(
+      createProduct({ category: "sun protection" }),
+      createCampaign(),
+      "1:1"
+    );
 
     const subjectIndex = prompt.indexOf("A premium sun protection product");
     const contextIndex = prompt.indexOf("Designed for");
@@ -117,6 +122,48 @@ describe("buildPrompt — field injection from brief", () => {
     expect(layoutIndex).toBeGreaterThan(contextIndex);
     expect(styleIndex).toBeGreaterThan(layoutIndex);
     expect(exclusionsIndex).toBeGreaterThan(styleIndex);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Group 1b: Edge cases — empty / malformed field values
+// ---------------------------------------------------------------------------
+
+describe("buildPrompt — field edge cases", () => {
+  // FINDING #4 fix: empty keyFeatures must degrade gracefully.
+  // Source was patched to guard this; the test locks in the contract.
+  it("omits the Key features sentence when keyFeatures is empty", () => {
+    const product = createProduct({ keyFeatures: [] });
+    const prompt = buildPrompt(product, createCampaign(), "1:1");
+    expect(prompt).not.toContain("Key features:");
+    expect(prompt).not.toContain("Key features: .");
+  });
+
+  it("includes the Key features sentence when keyFeatures has entries", () => {
+    const product = createProduct({ keyFeatures: ["lightweight"] });
+    const prompt = buildPrompt(product, createCampaign(), "1:1");
+    expect(prompt).toContain("Key features: lightweight.");
+  });
+
+  // FINDING #3 fix: empty color must degrade gracefully. Source already
+  // guards this with `product.color ? ... : ""` but there was no proof test.
+  it("omits the brand color palette sentence when color is empty string", () => {
+    const product = createProduct({ color: "" });
+    const prompt = buildPrompt(product, createCampaign(), "1:1");
+    expect(prompt).not.toContain("brand color palette");
+    expect(prompt).not.toContain("palette is .");
+  });
+
+  // FINDING #9 fix: document the contract that existingAsset is NOT leaked
+  // into the prompt. buildPrompt ignores this field (it's used upstream by
+  // assetResolver), and this test forward-protects that contract.
+  it("never leaks product.existingAsset value into the prompt", () => {
+    const product = createProduct({
+      existingAsset: "secret-internal-path/pre-uploaded.png",
+    });
+    const prompt = buildPrompt(product, createCampaign(), "1:1");
+    expect(prompt).not.toContain("secret-internal-path/pre-uploaded.png");
+    expect(prompt).not.toContain("existingAsset");
   });
 });
 
@@ -204,20 +251,34 @@ describe("buildPrompt — seasonal mood mapping", () => {
     expect(prompt).toContain("amber and golden");
   });
 
+  // FINDING #1 fix: this test had a silent-false-negative risk because
+  // a null regex match would just fail to add to the Set without asserting.
+  // Now we explicitly assert the match succeeded for every season, AND
+  // explicitly assert size === 4 so a broken season fails loudly.
   it("every valid season produces a unique mood language", () => {
     const product = createProduct();
     const moods = new Set<string>();
 
     for (const season of VALID_SEASONS) {
       const prompt = buildPrompt(product, createCampaign({ season }), "1:1");
-      // Extract the "Setting:" portion which contains the mood
       const settingMatch = prompt.match(/Setting: ([^.]+)\./);
+
+      // Explicit assertion — fail loudly if the template format changes
+      // rather than silently skipping the Set entry.
+      expect(
+        settingMatch,
+        `Setting sentence missing for season="${season}" — template format may have changed`
+      ).not.toBeNull();
+
       if (settingMatch) {
         moods.add(settingMatch[1]);
       }
     }
 
-    expect(moods.size).toBe(VALID_SEASONS.length);
+    // Assert the full expected set size, not just "equals VALID_SEASONS.length"
+    // — this protects against the scenario where both sides are wrong.
+    expect(moods.size).toBe(4);
+    expect(VALID_SEASONS.length).toBe(4);
   });
 });
 
@@ -245,19 +306,27 @@ describe("buildPrompt — category-aware face policy", () => {
     }
   );
 
-  it("non-lifestyle category excludes human faces", () => {
-    const product = createProduct({ category: "electronics" });
-    const prompt = buildPrompt(product, createCampaign(), "1:1");
-    expect(prompt).toContain("No human faces");
-    expect(prompt).toContain("product-focused composition");
-    expect(prompt).not.toContain("People may appear naturally");
-  });
+  // FINDING #7 fix: collapsed two near-duplicate tests (electronics +
+  // packaged food) into a single parametrized test covering 5 non-lifestyle
+  // categories. Broader coverage AND less duplication.
+  const NON_LIFESTYLE_CATEGORIES = [
+    "electronics",
+    "packaged food",
+    "beverages",
+    "home goods",
+    "automotive",
+  ];
 
-  it("another non-lifestyle category (packaged food) excludes human faces", () => {
-    const product = createProduct({ category: "packaged food" });
-    const prompt = buildPrompt(product, createCampaign(), "1:1");
-    expect(prompt).toContain("No human faces");
-  });
+  it.each(NON_LIFESTYLE_CATEGORIES)(
+    "non-lifestyle category %s excludes human faces",
+    (category) => {
+      const product = createProduct({ category });
+      const prompt = buildPrompt(product, createCampaign(), "1:1");
+      expect(prompt).toContain("No human faces");
+      expect(prompt).toContain("product-focused composition");
+      expect(prompt).not.toContain("People may appear naturally");
+    }
+  );
 
   it("category matching is case-insensitive (uppercase)", () => {
     const product = createProduct({ category: "SUN PROTECTION" });
@@ -277,30 +346,26 @@ describe("buildPrompt — category-aware face policy", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildPrompt — constant layers (brand coherence)", () => {
-  it("style layer is identical across different products", () => {
+  // FINDING #12 fix: collapsed two near-identical styleText assertions
+  // (across products + across ratios) into one parametrized loop.
+  const STYLE_TEXT =
+    "Photorealistic commercial product photography. High-end advertising quality.";
+
+  it("style layer is identical across products AND aspect ratios", () => {
     const campaign = createCampaign();
-    const sunscreen = createProduct({ name: "Sunscreen A", category: "sun protection" });
-    const lotion = createProduct({ name: "Lotion B", category: "skincare" });
+    const productVariants = [
+      createProduct({ name: "Sunscreen A", category: "sun protection" }),
+      createProduct({ name: "Lotion B", category: "skincare" }),
+      createProduct({ name: "Headphones", category: "electronics" }),
+    ];
+    const ratios: AspectRatio[] = ["1:1", "9:16", "16:9"];
 
-    const prompt1 = buildPrompt(sunscreen, campaign, "1:1");
-    const prompt2 = buildPrompt(lotion, campaign, "1:1");
-
-    // Both contain the identical style layer
-    const styleText = "Photorealistic commercial product photography. High-end advertising quality.";
-    expect(prompt1).toContain(styleText);
-    expect(prompt2).toContain(styleText);
-  });
-
-  it("style layer is identical across different aspect ratios", () => {
-    const product = createProduct();
-    const campaign = createCampaign();
-
-    const prompt_1x1 = buildPrompt(product, campaign, "1:1");
-    const prompt_9x16 = buildPrompt(product, campaign, "9:16");
-
-    const styleText = "Photorealistic commercial product photography. High-end advertising quality.";
-    expect(prompt_1x1).toContain(styleText);
-    expect(prompt_9x16).toContain(styleText);
+    for (const product of productVariants) {
+      for (const ratio of ratios) {
+        const prompt = buildPrompt(product, campaign, ratio);
+        expect(prompt).toContain(STYLE_TEXT);
+      }
+    }
   });
 
   it("exclusions layer always contains the safety language", () => {
@@ -313,6 +378,33 @@ describe("buildPrompt — constant layers (brand coherence)", () => {
       expect(prompt).toContain(
         "Do not include any text, letters, words, logos, watermarks, or brand names"
       );
+    }
+  });
+
+  // FINDING #5 fix: first-class determinism proof. The PR claims the builder
+  // is template-based and auditable — this test is the byte-for-byte proof.
+  it("is deterministic — identical input produces byte-identical output", () => {
+    const product = createProduct();
+    const campaign = createCampaign();
+    const ratio: AspectRatio = "1:1";
+
+    const prompt1 = buildPrompt(product, campaign, ratio);
+    const prompt2 = buildPrompt(product, campaign, ratio);
+    const prompt3 = buildPrompt(product, campaign, ratio);
+
+    expect(prompt1).toBe(prompt2);
+    expect(prompt2).toBe(prompt3);
+  });
+
+  it("is deterministic across all aspect ratios", () => {
+    const product = createProduct();
+    const campaign = createCampaign();
+    const ratios: AspectRatio[] = ["1:1", "9:16", "16:9"];
+
+    for (const ratio of ratios) {
+      const first = buildPrompt(product, campaign, ratio);
+      const second = buildPrompt(product, campaign, ratio);
+      expect(first).toBe(second);
     }
   });
 });
@@ -333,6 +425,13 @@ describe("buildGenerationTasks — combinatorics", () => {
     const tasks = buildGenerationTasks(campaign, products, aspectRatios);
 
     expect(tasks).toHaveLength(6);
+
+    // FINDING #6 fix: assert every task prompt is a non-empty, meaningful
+    // string. Counting tasks is meaningless if prompts are blank.
+    for (const task of tasks) {
+      expect(task.prompt.length).toBeGreaterThan(100);
+      expect(task.prompt).toContain("premium");
+    }
   });
 
   it("produces 1 task for 1 product × 1 aspect ratio", () => {
@@ -342,6 +441,7 @@ describe("buildGenerationTasks — combinatorics", () => {
       ["1:1"]
     );
     expect(tasks).toHaveLength(1);
+    expect(tasks[0].prompt.length).toBeGreaterThan(100);
   });
 
   it("produces 6 tasks for 3 products × 2 aspect ratios", () => {
@@ -352,6 +452,9 @@ describe("buildGenerationTasks — combinatorics", () => {
     ];
     const tasks = buildGenerationTasks(createCampaign(), products, ["1:1", "9:16"]);
     expect(tasks).toHaveLength(6);
+    for (const task of tasks) {
+      expect(task.prompt.length).toBeGreaterThan(100);
+    }
   });
 
   it("produces 0 tasks for empty products array", () => {
@@ -359,20 +462,35 @@ describe("buildGenerationTasks — combinatorics", () => {
     expect(tasks).toHaveLength(0);
   });
 
-  it("each task carries the correct product reference, aspect ratio, and dimensions", () => {
+  // FINDING #8 fix: assert dimensions with literal pixel values, not a
+  // reference to ASPECT_RATIO_CONFIG which would mirror any bad constant.
+  // If someone fat-fingers the config (e.g. 1024 → 1000), this catches it.
+  it("each task carries the correct product reference, aspect ratio, and literal dimensions", () => {
     const product = createProduct();
     const campaign = createCampaign();
     const tasks = buildGenerationTasks(campaign, [product], ["1:1", "9:16", "16:9"]);
 
     expect(tasks[0].product).toBe(product);
     expect(tasks[0].aspectRatio).toBe("1:1");
-    expect(tasks[0].dimensions).toEqual(ASPECT_RATIO_CONFIG["1:1"]);
+    expect(tasks[0].dimensions).toEqual({
+      width: 1080,
+      height: 1080,
+      dalleSize: "1024x1024",
+    });
 
     expect(tasks[1].aspectRatio).toBe("9:16");
-    expect(tasks[1].dimensions).toEqual(ASPECT_RATIO_CONFIG["9:16"]);
+    expect(tasks[1].dimensions).toEqual({
+      width: 1080,
+      height: 1920,
+      dalleSize: "1024x1792",
+    });
 
     expect(tasks[2].aspectRatio).toBe("16:9");
-    expect(tasks[2].dimensions).toEqual(ASPECT_RATIO_CONFIG["16:9"]);
+    expect(tasks[2].dimensions).toEqual({
+      width: 1200,
+      height: 675,
+      dalleSize: "1792x1024",
+    });
   });
 });
 
@@ -381,10 +499,25 @@ describe("buildGenerationTasks — combinatorics", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildGenerationTasks — prompt uniqueness + content safety", () => {
-  it("all tasks in a 6-image batch produce unique prompts", () => {
+  // FINDING #2 fix: previously used one lifestyle + one non-lifestyle
+  // category, which meant the uniqueness came partly from face-policy
+  // differences, not product-name differentiation. Now both products share
+  // the SAME lifestyle category, so any uniqueness proves the product name +
+  // description + features layer is actually differentiating prompts.
+  it("all tasks in a 6-image batch produce unique prompts even when categories match", () => {
     const products = [
-      createProduct({ name: "Product A", slug: "a", category: "sun protection" }),
-      createProduct({ name: "Product B", slug: "b", category: "after-sun care" }),
+      createProduct({
+        name: "SPF 50 Mineral Sunscreen",
+        slug: "spf-50-mineral",
+        description: "Reef-safe zinc oxide formula, SPF 50",
+        category: "sun protection",
+      }),
+      createProduct({
+        name: "Sport SPF 30 Spray",
+        slug: "sport-spf-30-spray",
+        description: "Continuous-spray sunscreen for active outdoor use",
+        category: "sun protection",
+      }),
     ];
     const tasks = buildGenerationTasks(createCampaign(), products, ["1:1", "9:16", "16:9"]);
 
@@ -411,14 +544,20 @@ describe("buildGenerationTasks — prompt uniqueness + content safety", () => {
     }
   });
 
-  it("no prompt contains known content-policy trigger phrases", () => {
+  // FINDING #11 adjustment: kept this test as a forward-looking regression
+  // guard. Even though the current template doesn't contain these phrases,
+  // future template edits (e.g., adding "clinically proven" to the style
+  // layer) would be caught. Reframed as a brand-safety guard rather than
+  // content-policy trigger to make the intent clearer.
+  it("no prompt contains medical-claim or brand-safety-violating language", () => {
     const tasks = buildGenerationTasks(
       createCampaign(),
       [createProduct()],
       ["1:1", "9:16", "16:9"]
     );
 
-    // Phrases that DALL-E 3 rejects or that imply medical claims
+    // Medical claims and absolute-guarantee language that must never appear
+    // in ad copy without legal review.
     const prohibitedPatterns = [
       /clinically proven/i,
       /FDA approved/i,
