@@ -292,6 +292,14 @@ From the assessment PDF: *"Please ensure that your solution reflects thoughtful 
 "Three layers. In transit from DALL-E: HTTPS, and we use `b64_json` response format so image bytes arrive in the API response itself — no second HTTP call to a temporary URL. In memory: Buffer in the Node.js process, never written to temp files. At rest in S3: SSE-S3 (AES-256 server-side encryption) per-bucket. Pre-signed URLs are HTTPS and time-scoped (24hr). Production: CloudFront signed cookies eliminate URL leakage risk entirely."
 `[Source: ADR-002 Encryption table, b64_json trade-off decision]`
 
+**D-33** | *"How do you debug issues in production?"*
+"Every request gets a UUID at the route entry that flows through every pipeline stage — into structured logs, error responses, and the output manifest. If a reviewer reports 'my generation failed,' I can grep by request ID and see exactly which stage failed, which product, which DALL-E call, and how long each step took. The manifest is also the data source for the D3 dashboard — it shows pipeline timing breakdown per image. For the POC it's console.log captured by Vercel; production would be OpenTelemetry piped to Datadog with alerting on error rate and p95 latency."
+`[Source: ADR-002 Observability Architecture section, ADS-009 D3 charts]`
+
+**D-34** | *"What happens when the AI fails?"*
+"Partial failure tolerance. If 5 of 6 images succeed and 1 hits a content policy rejection, the pipeline returns the 5 successes plus a typed error for the failure. The frontend renders what worked and shows an inline 'retry this image' prompt for what didn't. Promise.allSettled, not Promise.all. A rate-limited DALL-E call retries 3 times with exponential backoff automatically. A hanging DALL-E call gets killed at 30 seconds via AbortSignal. The user never waits forever and never loses successful results because of one failure."
+`[Source: ADR-002 Failure Mode Matrix, orchestration.md partial failure handling]`
+
 ---
 
 ## Appendix: Key Contacts

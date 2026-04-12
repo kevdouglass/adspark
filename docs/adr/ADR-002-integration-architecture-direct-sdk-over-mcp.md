@@ -264,6 +264,217 @@ Brand Triage Agent (V2 — ADS-024)
 
 The pipeline itself remains deterministic direct SDK calls. The Brand Triage Agent feeds it a `BrandProfile` — the pipeline never needs to "discover" DALL-E.
 
+---
+
+## Request Lifecycle — End-to-End Sequence
+
+What happens when a user clicks "Generate" on the dashboard:
+
+```
+User                  React Dashboard          API Route              Pipeline                 OpenAI          S3
+ │                        │                      │                      │                       │              │
+ │  clicks "Generate"     │                      │                      │                       │              │
+ ├───────────────────────►│                      │                      │                       │              │
+ │                        │  POST /api/generate  │                      │                       │              │
+ │                        │  {brief JSON}        │                      │                       │              │
+ │                        ├─────────────────────►│                      │                       │              │
+ │                        │                      │  1. validateEnv()    │                       │              │
+ │                        │                      │  2. getOpenAIClient()│                       │              │
+ │                        │                      │  3. getStorage()     │                       │              │
+ │                        │                      │  4. parseBrief()     │                       │              │
+ │                        │                      ├─────────────────────►│                       │              │
+ │                        │                      │                      │  5. resolveAssets()    │              │
+ │                        │                      │                      ├──────────────────────────────────────►│
+ │                        │                      │                      │  exists()?             │              │
+ │                        │                      │                      │◄─────────────────────────────────────┤
+ │                        │                      │                      │                       │              │
+ │                        │                      │                      │  6. buildGenerationTasks()            │
+ │                        │                      │                      │  7. generateImages()  │              │
+ │                        │                      │                      │  ┌─── Promise.all ────┐│              │
+ │                        │                      │                      │  │ images.generate()  ││              │
+ │                        │                      │                      │  ├────────────────────►│              │
+ │                        │                      │                      │  │ images.generate()  ││              │
+ │                        │                      │                      │  ├────────────────────►│              │
+ │                        │                      │                      │  │ ... (6 parallel)   ││              │
+ │                        │                      │                      │  │◄────────────────────┤  ~15-20s     │
+ │                        │                      │                      │  └────────────────────┘│              │
+ │                        │                      │                      │                       │              │
+ │                        │                      │                      │  8. overlayText() x6  │              │
+ │                        │                      │                      │  9. organizeOutput()  │              │
+ │                        │                      │                      ├──────────────────────────────────────►│
+ │                        │                      │                      │  save() x12 (6 PNG + 6 WebP)         │
+ │                        │                      │                      │◄─────────────────────────────────────┤
+ │                        │                      │                      │  10. return PipelineResult            │
+ │                        │                      │◄─────────────────────┤                       │              │
+ │                        │  200 {PipelineResult} │                      │                       │              │
+ │                        │◄─────────────────────┤                      │                       │              │
+ │  Gallery renders       │                      │                      │                       │              │
+ │  creatives via         │                      │                      │                       │              │
+ │  pre-signed URLs       │                      │                      │                       │              │
+ │◄───────────────────────┤                      │                      │                       │              │
+ │                        │  GET pre-signed URL   │                      │                       │              │
+ │                        ├──────────────────────────────────────────────────────────────────────────────────►│
+ │                        │◄─────────────────────────────────────────────────────────────────────────────────┤
+ │  sees 6 creatives      │  image bytes (HTTPS) │                      │                       │              │
+ │◄───────────────────────┤                      │                      │                       │              │
+```
+
+### Timing Budget (60s Vercel Hobby Limit)
+
+```
+ 0s ─────── 2-4s ──────── 5s ───────────── 25s ──────── 28s ──── 30s ───── 32s
+ │ cold     │ env +       │ resolve        │ overlay    │ S3     │ JSON    │
+ │ start    │ parse       │ + generate     │ x6         │ upload │ response│
+ │          │ brief       │ (parallel)     │            │        │         │
+ └──────────┴─────────────┴────────────────┴────────────┴────────┴─────────┘
+                                                              Total: ~30-35s
+                                                              Buffer: ~25-30s
+```
+
+---
+
+## Failure Mode Matrix
+
+What happens when each external service is unavailable:
+
+| Service Down | Detection | User Experience | Pipeline Behavior | Recovery |
+|-------------|-----------|----------------|-------------------|----------|
+| **OpenAI API (full outage)** | All 6 `images.generate()` calls fail with 500/503 | "Generation failed — OpenAI service unavailable. Try again later." | `withRetry` exhausts 3 attempts per image, then surfaces `PipelineError` for each. `PipelineResult.creatives` = empty, `errors` = 6 entries. | Retry manually. No data loss — brief is stateless. |
+| **OpenAI API (rate limit, 429)** | Some/all calls get 429 | Transparent to user — retry handles it. May add 5-10s to total time. | `withRetry` does exponential backoff (1s → 2s → 4s). `p-limit(5)` prevents concurrent overload. If still 429 after 3 retries, surface as partial failure. | Automatic via retry. If persistent, reduce `OPENAI_CONCURRENCY` to 3. |
+| **OpenAI content policy (400)** | Specific image rejected | "1 of 6 images failed: content policy violation" + the other 5 display normally | No retry on 400. That image's `PipelineError.retryable = false`. Pipeline continues with remaining 5 images. Partial result returned. | User revises the campaign brief (adjust product description or tone) and regenerates the failed image. |
+| **S3 (write failure)** | `PutObjectCommand` throws | "Images generated but storage failed — retrying..." | Generated images are in memory (Buffer). Retry the save. If S3 is fully down, fall back to local `/tmp` storage (Vercel ephemeral) and return local URLs. | S3 outages are rare (<99.99% SLA). Fallback to ephemeral storage ensures the user sees their creatives even if persistence fails. |
+| **S3 (read failure — pre-signed URL)** | Browser gets 403/404 on image load | Broken image icon in gallery | This happens AFTER the pipeline succeeds. The pre-signed URL is valid but S3 can't serve the object. | Regenerate the pre-signed URL (it may have expired or the object was deleted). Frontend retry with fresh URL from `GET /api/campaigns/{id}`. |
+| **Network (user → Vercel)** | `fetch()` throws `TypeError` or `AbortError` (timeout) | "Network error — check your connection and try again." | Request never reaches the server. No pipeline execution. No cost. | Client-side retry. `AbortSignal.timeout(55_000)` prevents indefinite hang. |
+| **Vercel cold start + slow pipeline** | Total exceeds 60s | "Request timed out. The pipeline took too long." | Vercel kills the function. Any DALL-E calls in flight are orphaned (OpenAI still bills for them). No output saved. | Pre-warm the function before demo. Production: Vercel Pro (300s timeout) or move to a dedicated backend (Railway). |
+| **Env var missing (OPENAI_API_KEY)** | `validateEnv()` throws at route entry | `500: OPENAI_API_KEY is required` | Fail-fast. No pipeline execution. No API calls. No cost. | Developer adds the env var and redeploys. Clear error message tells exactly what's missing. |
+
+### Partial Failure Guarantee
+
+The pipeline NEVER returns an empty result when some images succeed. The contract:
+
+```typescript
+// If 5/6 images succeed:
+{
+  campaignId: "summer-2026-suncare",
+  creatives: [/* 5 successful creatives */],
+  totalImages: 5,
+  errors: [{
+    product: "after-sun-aloe-gel",
+    aspectRatio: "16:9",
+    stage: "generating",
+    message: "Content policy violation: ...",
+    retryable: false
+  }]
+}
+```
+
+The frontend renders the 5 successes and shows an inline error for the 1 failure with a "Retry this image" button. This is better UX than "your entire campaign failed because one prompt was rejected."
+
+---
+
+## Observability Architecture
+
+How we trace what happens inside the pipeline — from request entry to response exit.
+
+### Request ID Correlation
+
+Every API request gets a unique ID at the route entry point. This ID flows through every pipeline stage and appears in:
+- Server logs (structured JSON)
+- Error responses to the client
+- The pipeline manifest (for post-mortem debugging)
+
+```typescript
+// At route entry (ADS-028 — lib/api/services.ts)
+export function createRequestContext(): RequestContext {
+  return {
+    requestId: crypto.randomUUID(),
+    startedAt: performance.now(),
+  };
+}
+
+// Flows through every pipeline function
+export async function runPipeline(
+  brief: CampaignBrief,
+  storage: StorageProvider,
+  client: OpenAI,
+  ctx: RequestContext     // ← correlation context
+): Promise<PipelineResult> { ... }
+```
+
+### Structured Logging
+
+Every pipeline stage emits a structured log entry:
+
+```json
+{
+  "requestId": "a1b2c3d4-...",
+  "stage": "generating",
+  "product": "spf-50-sunscreen",
+  "aspectRatio": "1:1",
+  "durationMs": 14200,
+  "status": "success",
+  "timestamp": "2026-04-11T18:30:14.200Z"
+}
+```
+
+For the POC, this is `console.log(JSON.stringify(...))` — Vercel captures stdout as structured logs automatically. Production: pipe to Datadog, CloudWatch, or OpenTelemetry collector.
+
+### What Gets Logged (and What Doesn't)
+
+| Logged | NOT Logged |
+|--------|-----------|
+| Request ID | API keys (never) |
+| Pipeline stage transitions | Raw image bytes |
+| Per-image generation time | User PII beyond campaign brief fields |
+| Error messages + stack traces | Full DALL-E prompts in production (brand IP risk) |
+| Total request duration | S3 pre-signed URLs (contain auth signatures) |
+| Image count (generated vs reused) | |
+
+### Manifest as Audit Trail
+
+Every successful pipeline run writes a `manifest.json` alongside the creatives (see `docs/architecture/image-processing.md`). This serves as a permanent audit trail:
+
+```json
+{
+  "requestId": "a1b2c3d4-...",
+  "campaignId": "summer-2026-suncare",
+  "generatedAt": "2026-04-11T18:30:00Z",
+  "totalTimeMs": 22400,
+  "stages": {
+    "validating": 12,
+    "resolving": 48,
+    "generating": 18200,
+    "compositing": 3100,
+    "organizing": 1040
+  },
+  "products": [
+    {
+      "name": "SPF 50 Sunscreen",
+      "creatives": [
+        {
+          "ratio": "1:1",
+          "prompt": "A premium sun protection product...",
+          "generationTimeMs": 14200,
+          "compositingTimeMs": 480
+        }
+      ]
+    }
+  ]
+}
+```
+
+This manifest is what the D3 dashboard reads to render pipeline metrics (ADS-009). It's also what a client reviews in a post-engagement debrief: "Here's exactly what was generated, how long each step took, and what prompts were used."
+
+### Production Observability Path
+
+| Concern | POC | Production |
+|---------|-----|------------|
+| Logging | `console.log` (Vercel captures) | OpenTelemetry → Datadog / CloudWatch |
+| Request tracing | `requestId` in logs + manifest | Distributed tracing (W3C Trace Context) |
+| Alerting | None | PagerDuty on error rate > 5% or p95 latency > 45s |
+| Dashboards | D3 charts in app (ADS-009) | Grafana board with generation success rate, latency percentiles, cost per campaign |
+| Cost tracking | Manual (check OpenAI billing) | Per-request cost calculation in manifest (`images * $0.04`) |
+
 ## Consequences
 
 ### Positive
