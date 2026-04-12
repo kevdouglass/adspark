@@ -35,21 +35,67 @@ export interface ApiError {
  *
  * Adding a new code is a non-breaking change.
  * Removing or renaming a code is a breaking change and requires version bump.
+ *
+ * The `CLIENT_*` codes are CLIENT-ORIGINATED — they are never produced by
+ * the pipeline or the server, and the server-side `mapPipelineErrorToApiError`
+ * exhaustive switch intentionally does NOT handle them. They exist so the
+ * frontend can distinguish "request never reached the server" (network,
+ * timeout) from "server rejected or errored" — different error-UI messaging.
  */
 export type ApiErrorCode =
-  // 400-class: client errors
+  // 400-class: client-supplied bad input (server-originated)
   | "INVALID_JSON"
   | "INVALID_BRIEF"
   | "REQUEST_TOO_LARGE"
   | "CONTENT_POLICY_VIOLATION"
-  // 500-class: server errors
+  // 500-class: server errors (server-originated)
   | "MISSING_CONFIGURATION"
   | "UPSTREAM_ERROR"
   | "UPSTREAM_RATE_LIMITED"
   | "UPSTREAM_TIMEOUT"
   | "STORAGE_ERROR"
   | "PROCESSING_ERROR"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  // Client-only: never produced server-side, never consumed by the pipeline
+  // error mapper. These let the UI distinguish network failures from server
+  // errors so retry/diagnostic messaging can differ.
+  | "CLIENT_NETWORK_ERROR"
+  | "CLIENT_TIMEOUT"
+  // Client-only: user intentionally cancelled (component unmount, explicit
+  // AbortController.abort()). Semantically distinct from a network failure —
+  // the UI should usually treat this as a silent no-op, not an error state.
+  | "CLIENT_ABORTED";
+
+/**
+ * Runtime-queryable set of all valid ApiErrorCode values.
+ *
+ * Used by the client's `isApiErrorShape` check to reject server responses
+ * that match the structural shape of `ApiError` but carry an unknown
+ * `code` value. Without this guard, a malicious or misconfigured server
+ * could bypass the enumerated type system and a downstream
+ * `switch(error.code)` would silently miss the unknown variant.
+ *
+ * If you add a new variant to `ApiErrorCode`, add it here too — TypeScript
+ * will NOT flag a missing entry (a `Set<ApiErrorCode>` literal doesn't
+ * force exhaustiveness). The `KNOWN_API_ERROR_CODES` name is deliberate
+ * to make a missing entry easier to find on grep.
+ */
+export const KNOWN_API_ERROR_CODES: ReadonlySet<ApiErrorCode> = new Set<ApiErrorCode>([
+  "INVALID_JSON",
+  "INVALID_BRIEF",
+  "REQUEST_TOO_LARGE",
+  "CONTENT_POLICY_VIOLATION",
+  "MISSING_CONFIGURATION",
+  "UPSTREAM_ERROR",
+  "UPSTREAM_RATE_LIMITED",
+  "UPSTREAM_TIMEOUT",
+  "STORAGE_ERROR",
+  "PROCESSING_ERROR",
+  "INTERNAL_ERROR",
+  "CLIENT_NETWORK_ERROR",
+  "CLIENT_TIMEOUT",
+  "CLIENT_ABORTED",
+]);
 
 /**
  * Request body size limit (50KB).
