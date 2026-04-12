@@ -59,13 +59,30 @@ const LINE_HEIGHT_MULTIPLIER = 1.3;
  *
  * The algorithm respects MAX_LINES: if the text would need more than 3 lines,
  * the last line is truncated with "..." to signal overflow.
+ *
+ * SECURITY: Defensive input normalization — AI-enabled tools face prompt
+ * injection and input manipulation risks. Even though this is an internal
+ * function, the campaign message originates from user input. We normalize:
+ * - Collapse all whitespace runs (tabs, newlines, multiple spaces) to single spaces
+ * - Trim leading/trailing whitespace
+ * - Return [] for empty or whitespace-only input (no blank band rendering)
  */
 export function wrapText(
   context: SKRSContext2D,
   message: string,
   maxWidth: number
 ): string[] {
-  const words = message.split(" ");
+  // Normalize whitespace: collapse tabs, newlines, and multi-space runs
+  // into single spaces, then trim. This prevents malformed output from
+  // unexpected control characters in user input.
+  const normalized = message.replace(/\s+/g, " ").trim();
+
+  // Empty or whitespace-only input → no text to render
+  if (normalized.length === 0) {
+    return [];
+  }
+
+  const words = normalized.split(" ");
   const lines: string[] = [];
   let currentLine = "";
 
@@ -225,30 +242,38 @@ export async function overlayText(
   }
   context.drawImage(image, 0, 0, width, height);
 
-  // Step 4: Draw semi-transparent band in bottom 25%
+  // Step 4: Word-wrap message first — skip band entirely if no text
+  // This prevents rendering a blank band for whitespace-only input.
+  const fontSizeForMeasure = Math.round(width / FONT_SIZE_DIVISOR);
+  context.font = `bold ${fontSizeForMeasure}px sans-serif`;
+  const paddingForMeasure = Math.round(width * PADDING_RATIO);
+  const maxTextWidthForMeasure = width - paddingForMeasure * 2;
+  const lines = wrapText(context, message, maxTextWidthForMeasure);
+
+  if (lines.length === 0) {
+    // No text to render — return the resized image without band or overlay
+    const canvasBuffer = canvas.toBuffer("image/png");
+    return sharp(canvasBuffer).png({ compressionLevel: 6 }).toBuffer();
+  }
+
+  // Step 5: Draw semi-transparent band in bottom 25%
   const bandHeight = Math.round(height * BAND_HEIGHT_RATIO);
   const bandY = height - bandHeight;
   context.fillStyle = BAND_COLOR;
   context.fillRect(0, bandY, width, bandHeight);
 
-  // Step 5: Configure text rendering
+  // Step 6: Configure text rendering styles
   // Font: system sans-serif for POC. Production: register brand fonts via
   // GlobalFonts.registerFromPath() — see brand-triage-agent.md (ADS-024).
   // Note: on headless CI/serverless, Skia falls back to a bundled default.
-  const fontSize = Math.round(width / FONT_SIZE_DIVISOR);
-  const padding = Math.round(width * PADDING_RATIO);
-  const maxTextWidth = width - padding * 2;
-  const lineHeight = Math.round(fontSize * LINE_HEIGHT_MULTIPLIER);
-
-  context.font = `bold ${fontSize}px sans-serif`;
+  const lineHeight = Math.round(fontSizeForMeasure * LINE_HEIGHT_MULTIPLIER);
   context.fillStyle = TEXT_COLOR;
   context.textAlign = "center";
   context.textBaseline = "middle";
 
-  // Step 6: Word-wrap and render text
-  // C1 fix: textBaseline = "middle" means fillText Y is the vertical center
-  // of the glyph. We position each line at its center — no extra lineHeight/2.
-  const lines = wrapText(context, message, maxTextWidth);
+  // Step 7: Render the (already-wrapped) text lines
+  // textBaseline = "middle" centers each glyph at its Y coordinate — the
+  // + lineHeight/2 offset positions each line at its own vertical center.
   const totalTextHeight = lines.length * lineHeight;
   const textStartY = bandY + (bandHeight - totalTextHeight) / 2;
 

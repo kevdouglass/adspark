@@ -152,6 +152,26 @@ describe("overlayText", () => {
     expect(resultBuffer.length).toBeGreaterThan(0);
   });
 
+  it("skips band rendering for whitespace-only message (no blank band)", async () => {
+    const dalleImage = await createTestImage(1024, 1024);
+    const whitespaceResult = await overlayText(
+      dalleImage,
+      "   \t\n  ",
+      SQUARE_DIMENSIONS
+    );
+    const emptyResult = await overlayText(
+      dalleImage,
+      "",
+      SQUARE_DIMENSIONS
+    );
+
+    // Both should produce the same output — resized image with no band/text
+    // Sizes should be equal (same content) or within 1% (PNG compression variance)
+    const sizeDifference = Math.abs(whitespaceResult.length - emptyResult.length);
+    const percentDifference = sizeDifference / emptyResult.length;
+    expect(percentDifference).toBeLessThan(0.01);
+  });
+
   it("handles Unicode characters in message", async () => {
     const unicodeMessage = "Protección Solar Premium — ¡Ahora 20% Descuento!";
     const dalleImage = await createTestImage(1024, 1024);
@@ -237,6 +257,61 @@ describe("wrapText (direct unit tests)", () => {
     const lines = wrapText(context, "", 1080 * 0.9);
 
     expect(lines).toHaveLength(0);
+  });
+
+  // --- Security: defensive input normalization (ADS-034) ---
+
+  it("returns [] for whitespace-only input (single space)", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, " ", 1080 * 0.9);
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it("returns [] for whitespace-only input (multiple spaces)", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, "     ", 1080 * 0.9);
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it("returns [] for tab and newline whitespace", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, "\t\n\r\t", 1080 * 0.9);
+
+    expect(lines).toHaveLength(0);
+  });
+
+  it("collapses multiple spaces between words", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, "Hello    World", 1080 * 0.9);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe("Hello World");
+  });
+
+  it("normalizes tabs and newlines to spaces", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, "Hello\tWorld\nToday", 1080 * 0.9);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe("Hello World Today");
+  });
+
+  it("trims leading and trailing whitespace", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, "   Hello World   ", 1080 * 0.9);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe("Hello World");
+  });
+
+  it("handles mixed whitespace with real content", () => {
+    const context = createTestContext();
+    const lines = wrapText(context, "\n\tSummer Sale\r\n", 1080 * 0.9);
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toBe("Summer Sale");
   });
 
   it("wraps long text via overlayText integration without crashing", async () => {
