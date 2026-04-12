@@ -1,0 +1,57 @@
+{
+  "_metadata": {
+    "generated": "2026-04-11",
+    "version": "1.0.0",
+    "lastUpdated": null,
+    "totalReviews": 0,
+    "totalLessons": 0
+  },
+  "agents": {},
+  "prTypeClassification": {
+    "feature": {
+      "description": "New feature implementation",
+      "requiredAgents": ["architecture", "code-quality"],
+      "optionalAgents": [],
+      "skipAgents": [],
+      "weight": {
+        "architecture": 1.0,
+        "code-quality": 1.0
+      }
+    },
+    "bugfix": {
+      "description": "Bug fix",
+      "requiredAgents": ["code-quality"],
+      "optionalAgents": ["architecture"],
+      "skipAgents": [],
+      "weight": {
+        "architecture": 0.6,
+        "code-quality": 1.0
+      }
+    },
+    "refactor": {
+      "description": "Code refactoring",
+      "requiredAgents": ["architecture", "code-quality"],
+      "optionalAgents": [],
+      "skipAgents": [],
+      "weight": {
+        "architecture": 1.0,
+        "code-quality": 0.8
+      }
+    },
+    "infrastructure": {
+      "description": "Build, CI/CD, config changes",
+      "requiredAgents": ["architecture"],
+      "optionalAgents": [],
+      "skipAgents": [],
+      "weight": {
+        "architecture": 0.8,
+        "code-quality": 0.5
+      }
+    }
+  },
+  "lessonsLearned": [],
+  "recurringPatterns": {},
+  "moduleRiskMap": {},
+  "crossAgentConsensus": [],
+  "reviewHistory": []
+}

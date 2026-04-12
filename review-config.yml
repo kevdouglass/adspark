@@ -1,0 +1,106 @@
+# ─────────────────────────────────────────────────────────────
+# Review Pipeline Configuration — AdSpark
+#
+# 7 agents: 2 core (always) + 5 specialists (auto-activate by file pattern)
+# Prompts: .review-prompts/{key}.md
+# ─────────────────────────────────────────────────────────────
+
+# ── Core Agents (always run) ──
+agents:
+  architecture:
+    activation: always
+    description: "System design, dependency direction, module boundaries, SOLID, clean architecture layer enforcement"
+    file_patterns: []
+
+  code-quality:
+    activation: always
+    description: "TypeScript idioms, async patterns, performance, error handling, type safety, naming, complexity"
+    file_patterns: []
+
+  # ── Specialist Agents (auto-activate by file pattern) ──
+
+  pipeline-ai:
+    activation: auto
+    description: "Prompt engineering quality, DALL-E API usage, brief validation, pipeline state machine, domain types, AI-specific risks"
+    file_patterns:
+      - "lib/pipeline/**"
+      - "examples/**/*.json"
+
+  frontend:
+    activation: auto
+    description: "React 19 / Next.js 15 patterns, component design, D3.js integration, accessibility, responsive design, Tailwind"
+    file_patterns:
+      - "app/**/*.tsx"
+      - "app/**/*.css"
+      - "components/**"
+      - "**/*.tsx"
+
+  orchestration:
+    activation: auto
+    description: "API route design, pipeline orchestration, concurrency, retry policy, storage abstraction, S3 integration, env var handling"
+    file_patterns:
+      - "app/api/**"
+      - "lib/storage/**"
+      - "lib/pipeline/pipeline.ts"
+      - "next.config.ts"
+      - ".env*"
+
+  image-processing:
+    activation: auto
+    description: "Sharp resize/crop, @napi-rs/canvas text overlay, aspect ratio mapping, output formats, buffer handling, font loading"
+    file_patterns:
+      - "lib/pipeline/textOverlay.ts"
+      - "lib/pipeline/imageGenerator.ts"
+      - "lib/pipeline/outputOrganizer.ts"
+
+  testing:
+    activation: auto
+    description: "Test coverage, test quality, mocking strategy, assertion specificity, edge cases, test organization"
+    file_patterns:
+      - "__tests__/**"
+      - "**/*.test.*"
+      - "**/*.spec.*"
+      - "vitest.config.*"
+
+# ── Model assignments ──
+# Sonnet for deep analysis on all agents. Opus for orchestrator synthesis.
+models:
+  architecture: sonnet
+  code-quality: sonnet
+  pipeline-ai: sonnet
+  frontend: sonnet
+  orchestration: sonnet
+  image-processing: sonnet
+  testing: sonnet
+  default: sonnet
+
+# ── Ignore patterns ──
+ignore_patterns:
+  - "**/*.lock"
+  - "**/node_modules/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.git/**"
+  - "**/.next/**"
+  - "**/generated/**"
+  - "**/output/**"
+  - "**/*.md"
+  - "knowledge-base/**"
+  - ".review-prompts/**"
+  - ".review-reports/**"
+
+# ── Thresholds ──
+thresholds:
+  max_diff_bytes: 100000
+  max_changed_files: 50
+
+# ── Feedback / learning loop ──
+feedback:
+  enabled: true
+  min_promotion_confidence: 0.85
+
+# ── Turn budgets ──
+turn_budgets:
+  core: 7
+  specialist: 5
+  orchestrator: 5
