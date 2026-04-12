@@ -12,13 +12,14 @@ Define the public API contract as **explicit parallel interfaces** with hand-wri
 **Response bodies:**
 - `GenerateSuccessResponseBody` — explicit `interface` listing every field in the public contract
 - `ApiCreativeOutput` — parallel to `CreativeOutput`, field-enumerated
-- `toGenerateSuccessResponseBody(result, requestId)` — hand-written mapper in `lib/api/mappers.ts`
+- `ApiPipelineError` — parallel to `PipelineError`, field-enumerated (covers the error sub-object inside the success response — same review-gate pattern)
+- `toGenerateSuccessResponseBody(result, requestId)` — hand-written mapper in `lib/api/mappers.ts` that calls `toApiCreativeOutput` and `toApiPipelineError` field-by-field
 
 **Request body:**
 - `GenerateRequestBody = z.infer<typeof campaignBriefSchema>` — derived from the Zod schema that ADR-005 already established as the single source of truth for both client and server validation.
 
 **Error bodies:**
-- `ApiError` (from `lib/api/errors.ts`) is the canonical name — no alias, no duplicate export. Every error branch in `route.ts` is pinned with `satisfies ApiError`.
+- `ApiError` stays in `lib/api/errors.ts` (which also owns the helper functions `buildApiError`, `mapPipelineErrorToApiError`, etc.) and is NOT re-exported from `lib/api/types.ts`. There is exactly one import path for the type. Every error branch in `route.ts` imports `ApiError` directly from `@/lib/api/errors` and pins the response body with `satisfies ApiError`.
 
 ## Context
 

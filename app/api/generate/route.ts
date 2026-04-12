@@ -42,7 +42,7 @@ import {
   sanitizeErrorMessage,
   MAX_REQUEST_BODY_BYTES,
 } from "@/lib/api/errors";
-import type { ApiError } from "@/lib/api/types";
+import type { ApiError } from "@/lib/api/errors";
 import { toGenerateSuccessResponseBody } from "@/lib/api/mappers";
 
 /**

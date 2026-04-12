@@ -33,8 +33,11 @@
 
 import type { z } from "zod";
 import type { campaignBriefSchema } from "@/lib/pipeline/briefParser";
-import type { AspectRatio, PipelineError } from "@/lib/pipeline/types";
-import type { ApiError, ApiErrorCode } from "./errors";
+import type {
+  AspectRatio,
+  PipelineErrorCause,
+  PipelineStage,
+} from "@/lib/pipeline/types";
 
 // ---------------------------------------------------------------------------
 // Request body
@@ -92,6 +95,27 @@ export interface ApiCreativeOutput {
 }
 
 /**
+ * A single pipeline error in the success response.
+ *
+ * Parallel shape to `PipelineError` in `lib/pipeline/types.ts`. Even though
+ * every field is a literal-union or string today, we enumerate them here
+ * so future additions to `PipelineError` (e.g., `internalStackTrace`,
+ * `rawUpstreamResponse`, debug metadata) do NOT auto-ship over the wire.
+ *
+ * The mapper `toApiPipelineError` in `lib/api/mappers.ts` copies each
+ * field explicitly — that's the review gate, same pattern as
+ * `toApiCreativeOutput`.
+ */
+export interface ApiPipelineError {
+  product?: string;
+  aspectRatio?: AspectRatio;
+  stage: PipelineStage;
+  cause: PipelineErrorCause;
+  message: string;
+  retryable: boolean;
+}
+
+/**
  * Success response body (HTTP 200) for POST /api/generate.
  *
  * Explicit parallel shape — not `PipelineResult & { requestId }`. Fields
@@ -106,7 +130,7 @@ export interface GenerateSuccessResponseBody {
   creatives: ApiCreativeOutput[];
   totalTimeMs: number;
   totalImages: number;
-  errors: PipelineError[];
+  errors: ApiPipelineError[];
   requestId: string;
 }
 
@@ -115,14 +139,15 @@ export interface GenerateSuccessResponseBody {
 // ---------------------------------------------------------------------------
 
 /**
- * Error response body for POST /api/generate (HTTP 4xx/5xx).
+ * Error responses use the canonical `ApiError` type from `./errors`, which
+ * is the module that owns both the type and the helper functions
+ * (`buildApiError`, `mapPipelineErrorToApiError`, etc.). This module does
+ * NOT re-export `ApiError`, so there is exactly one import path for the
+ * type — no footgun where two import paths resolve to the same symbol
+ * and teams split on which to use.
  *
- * Re-exported as `ApiError` directly — no alias. `ApiError` is shared by
- * ALL API routes (not just /generate), so keeping the canonical name
- * avoids the footgun where the same type is importable under two names
- * and callers split on which to import.
- *
- * Route handlers pin every error branch with `satisfies ApiError` to get
- * compile-time enforcement of the error contract, not just the happy path.
+ * Route handlers import `ApiError` directly from `@/lib/api/errors` and
+ * pin every error branch with `satisfies ApiError` to get compile-time
+ * enforcement of the error contract on both the happy path AND the error
+ * branches.
  */
-export type { ApiError, ApiErrorCode };

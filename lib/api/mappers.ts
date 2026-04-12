@@ -18,10 +18,12 @@
 
 import type {
   CreativeOutput,
+  PipelineError,
   PipelineResult,
 } from "@/lib/pipeline/types";
 import type {
   ApiCreativeOutput,
+  ApiPipelineError,
   GenerateSuccessResponseBody,
 } from "./types";
 
@@ -50,6 +52,30 @@ function toApiCreativeOutput(creative: CreativeOutput): ApiCreativeOutput {
 }
 
 /**
+ * Project a single `PipelineError` to its public `ApiPipelineError` shape.
+ *
+ * Same review-gate pattern as `toApiCreativeOutput` — a future addition to
+ * the domain `PipelineError` (e.g., `internalStackTrace`, `rawUpstreamResponse`,
+ * debug metadata) will NOT be copied here without an explicit code change.
+ *
+ * Why this mapper exists even though the two shapes look identical today:
+ * Consistency with ADR-006's thesis. If `result.errors: PipelineError[]` were
+ * passed through directly, the error branch would be the one seam in the
+ * wire format that still leaks domain fields — the exact problem the ADR was
+ * written to close.
+ */
+function toApiPipelineError(error: PipelineError): ApiPipelineError {
+  return {
+    product: error.product,
+    aspectRatio: error.aspectRatio,
+    stage: error.stage,
+    cause: error.cause,
+    message: error.message,
+    retryable: error.retryable,
+  };
+}
+
+/**
  * Project a `PipelineResult` + requestId to the public success response body.
  *
  * Used by `POST /api/generate` for 200 responses. Fields are enumerated
@@ -69,7 +95,7 @@ export function toGenerateSuccessResponseBody(
     creatives: result.creatives.map(toApiCreativeOutput),
     totalTimeMs: result.totalTimeMs,
     totalImages: result.totalImages,
-    errors: result.errors,
+    errors: result.errors.map(toApiPipelineError),
     requestId,
   };
 }
