@@ -124,9 +124,20 @@ export interface CreativeOutput {
   compositingTimeMs: number;
 }
 
+/**
+ * Unified error shape for all pipeline stages.
+ *
+ * `product` and `aspectRatio` are optional because some errors are
+ * system-level (e.g., brief.json save failure, timeout budget exceeded,
+ * validation failure) and not tied to a specific product × ratio pair.
+ *
+ * Consumers MUST handle both variants:
+ * - Creative errors: product + aspectRatio both defined
+ * - System errors: product and/or aspectRatio undefined
+ */
 export interface PipelineError {
-  product: string;
-  aspectRatio: AspectRatio;
+  product?: string;
+  aspectRatio?: AspectRatio;
   stage: PipelineStage;
   message: string;
   retryable: boolean;

@@ -54,12 +54,30 @@ import { organizeOutput } from "./outputOrganizer";
  * Used by the frontend PipelineProgress component (ADS-008) to render
  * real-time status. For MVP, the callback is optional — the pipeline
  * works identically with or without it.
+ *
+ * Callbacks may be sync or async — the pipeline awaits the returned value,
+ * so async callbacks are supported (e.g., for SSE/WebSocket emitters).
  */
-export type StageChangeCallback = (stage: PipelineStage) => void;
+export type StageChangeCallback = (
+  stage: PipelineStage
+) => void | Promise<void>;
 
 export interface RunPipelineOptions {
   onStageChange?: StageChangeCallback;
 }
+
+// ---------------------------------------------------------------------------
+// Internal constants — sentinel values for system-level errors
+// ---------------------------------------------------------------------------
+
+/** Total pipeline timeout budget before we bail out with partial results (ms). */
+const PIPELINE_TIMEOUT_BUDGET_MS = 40_000;
+
+/**
+ * Sentinel product slug for validation errors not tied to a specific product.
+ * (PipelineError.product is optional — we use this when setting it explicitly.)
+ */
+const VALIDATION_ERROR_STAGE = "validating" as const;
 
 /**
  * Run the full creative generation pipeline end-to-end.
@@ -81,23 +99,25 @@ export async function runPipeline(
   // ------------------------------------------------------------------------
   // Stage 1: Validating
   // ------------------------------------------------------------------------
-  emitStage("validating", onStageChange);
+  await emitStage("validating", onStageChange);
   // API route has already validated, but defensive re-check catches
   // any direct callers (tests, scripts) that bypass the boundary.
   const parseResult = parseBrief(brief);
   if (!parseResult.success) {
+    // Validation errors are system-level (not tied to a specific product/ratio)
+    // so product and aspectRatio are omitted.
     return {
       campaignId: brief.campaign.id,
       creatives: [],
       totalTimeMs: elapsedMs(ctx),
       totalImages: 0,
-      errors: parseResult.errors.map((message) => ({
-        product: "_brief",
-        aspectRatio: "1:1",
-        stage: "validating",
-        message,
-        retryable: false,
-      })),
+      errors: parseResult.errors.map(
+        (message): PipelineError => ({
+          stage: VALIDATION_ERROR_STAGE,
+          message,
+          retryable: false,
+        })
+      ),
     };
   }
   const validatedBrief = parseResult.brief;
@@ -105,7 +125,7 @@ export async function runPipeline(
   // ------------------------------------------------------------------------
   // Stage 2: Resolving assets
   // ------------------------------------------------------------------------
-  emitStage("resolving", onStageChange);
+  await emitStage("resolving", onStageChange);
   const assetResolutions = await resolveAssets(validatedBrief.products, storage);
 
   // Products with existing assets skip DALL-E generation.
@@ -121,16 +141,26 @@ export async function runPipeline(
   }
 
   // ------------------------------------------------------------------------
-  // Stage 3: Building generation tasks
+  // Stage 3: Building generation tasks (defensive — wrap in try/catch)
   // ------------------------------------------------------------------------
-  // buildGenerationTasks produces one task per product × aspect ratio.
-  // For products with a reused asset, we still build the task (for the prompt
-  // metadata) but skip the DALL-E call in the next stage.
-  const allTasks = buildGenerationTasks(
-    validatedBrief.campaign,
-    validatedBrief.products,
-    validatedBrief.aspectRatios
-  );
+  // buildGenerationTasks is pure and should not throw under validated input,
+  // but we catch defensively to uphold the "never throw except catastrophic"
+  // contract. A throw here surfaces as a validation error, not a crash.
+  let allTasks;
+  try {
+    allTasks = buildGenerationTasks(
+      validatedBrief.campaign,
+      validatedBrief.products,
+      validatedBrief.aspectRatios
+    );
+  } catch (e) {
+    allErrors.push({
+      stage: "validating",
+      message: `Failed to build generation tasks: ${e instanceof Error ? e.message : "unknown"}`,
+      retryable: false,
+    });
+    return buildPartialResult(validatedBrief, [], allErrors, ctx);
+  }
 
   // Partition tasks: which need DALL-E generation, which can reuse
   const tasksNeedingGeneration = allTasks.filter(
@@ -143,88 +173,81 @@ export async function runPipeline(
   // ------------------------------------------------------------------------
   // Stage 4: Generating images via DALL-E 3
   // ------------------------------------------------------------------------
-  emitStage("generating", onStageChange);
+  await emitStage("generating", onStageChange);
   const generationResult = await generateImages(tasksNeedingGeneration, client);
   allErrors.push(...generationResult.errors);
 
-  // Build GeneratedImage[] for reused assets (0ms generation time)
-  const reusedImages: GeneratedImage[] = tasksWithReusedAssets.map((task) => ({
-    task,
-    imageBuffer: reusedAssetBuffers.get(task.product.slug)!,
-    generationTimeMs: 0, // Reused, not generated
-  }));
+  // Build GeneratedImage[] for reused assets (0ms generation time).
+  // Typed guard: if the buffer is missing, this is a programmer error
+  // (tasksWithReusedAssets was filtered from the same map), so we throw
+  // a typed error rather than silently producing a corrupt GeneratedImage.
+  const reusedImages: GeneratedImage[] = tasksWithReusedAssets.map((task) => {
+    const buffer = reusedAssetBuffers.get(task.product.slug);
+    if (!buffer) {
+      throw new Error(
+        `Internal invariant violation: reused buffer missing for product "${task.product.slug}" after filter`
+      );
+    }
+    return {
+      task,
+      imageBuffer: buffer,
+      generationTimeMs: 0, // Reused, not generated
+    };
+  });
 
   const allGeneratedImages: GeneratedImage[] = [
     ...generationResult.images,
     ...reusedImages,
   ];
 
-  // Timeout budget check: if we've used more than 40s on generation,
-  // skip compositing retries and return what we have.
-  if (elapsedMs(ctx) > 40_000) {
+  // Timeout budget check — capture once to avoid mid-check race.
+  // NOTE: This check runs AFTER generation completes, so it cannot abort
+  // in-flight DALL-E calls. It protects the compositing + organizing stages
+  // from running when the total budget is already blown. True interruption
+  // requires plumbing an AbortSignal through generateImages — deferred to
+  // a future ticket (see docs/architecture/orchestration.md production path).
+  const elapsedAfterGeneration = elapsedMs(ctx);
+  if (elapsedAfterGeneration > PIPELINE_TIMEOUT_BUDGET_MS) {
     allErrors.push({
-      product: "_pipeline",
-      aspectRatio: "1:1",
       stage: "generating",
-      message: `Pipeline timeout budget exceeded (${elapsedMs(ctx)}ms > 40000ms). Returning partial results.`,
+      message: `Pipeline timeout budget exceeded (${elapsedAfterGeneration}ms > ${PIPELINE_TIMEOUT_BUDGET_MS}ms). Returning partial results without compositing/organizing.`,
       retryable: true,
     });
-    return buildPartialResult(validatedBrief, [], allErrors, ctx);
+    // Still write manifest for audit trail, even with 0 creatives
+    return await organizeAndReturn(
+      validatedBrief,
+      [],
+      allErrors,
+      storage,
+      ctx,
+      onStageChange
+    );
   }
 
   // ------------------------------------------------------------------------
   // Stage 5: Compositing text overlays
   // ------------------------------------------------------------------------
-  emitStage("compositing", onStageChange);
+  await emitStage("compositing", onStageChange);
   const composited = await compositeCreatives(
     allGeneratedImages,
     validatedBrief.campaign.message
   );
   allErrors.push(...composited.errors);
 
-  if (composited.creatives.length === 0) {
-    // Nothing succeeded — return partial result without organizing
-    return buildPartialResult(validatedBrief, [], allErrors, ctx);
-  }
-
   // ------------------------------------------------------------------------
-  // Stage 6: Organizing output
+  // Stage 6: Organizing output (ALWAYS runs, even with 0 creatives)
   // ------------------------------------------------------------------------
-  emitStage("organizing", onStageChange);
-  const organized = await organizeOutput(
-    validatedBrief.campaign.id,
+  // Rationale: manifest.json is the audit trail. Even if all creatives
+  // failed compositing, we still write the manifest to record what happened.
+  // This prevents silent loss of the error record.
+  return await organizeAndReturn(
     validatedBrief,
     composited.creatives,
+    allErrors,
     storage,
-    ctx
+    ctx,
+    onStageChange
   );
-  allErrors.push(...organized.errors);
-
-  // Note: organized.systemErrors are not creative-specific, so we don't
-  // push them to creative errors. They'd surface through the manifest.
-  // For simplicity in the POC, we include them in the response errors.
-  organized.systemErrors.forEach((systemError) => {
-    allErrors.push({
-      product: "_system",
-      aspectRatio: "1:1",
-      stage: "organizing",
-      message: systemError.message,
-      retryable: systemError.retryable,
-    });
-  });
-
-  // ------------------------------------------------------------------------
-  // Stage 7: Complete
-  // ------------------------------------------------------------------------
-  emitStage("complete", onStageChange);
-
-  return {
-    campaignId: validatedBrief.campaign.id,
-    creatives: organized.creatives,
-    totalTimeMs: elapsedMs(ctx),
-    totalImages: organized.creatives.length,
-    errors: allErrors,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -292,8 +315,9 @@ async function compositeCreatives(
 }
 
 /**
- * Build a partial PipelineResult when the pipeline short-circuits
- * (timeout budget exceeded, nothing composited successfully).
+ * Build a partial PipelineResult when the pipeline short-circuits at
+ * validation or task-building time (before any storage writes happen).
+ * Used ONLY for failures that occur before organizeOutput runs.
  */
 function buildPartialResult(
   brief: CampaignBrief,
@@ -310,13 +334,81 @@ function buildPartialResult(
   };
 }
 
-/** Emit a stage transition if a callback is provided. */
-function emitStage(
+/**
+ * Run the organizing stage and build the final PipelineResult.
+ *
+ * ALWAYS writes the manifest — even when creatives is empty — so we
+ * never silently lose the audit trail on total pipeline failure.
+ *
+ * organizeOutput() throws OrganizationError only on catastrophic manifest
+ * write failure. Any other storage error is collected into the returned
+ * errors array. We fold organized.systemErrors into the pipeline's allErrors
+ * via the shared PipelineError shape.
+ */
+async function organizeAndReturn(
+  brief: CampaignBrief,
+  composited: Creative[],
+  allErrors: PipelineError[],
+  storage: StorageProvider,
+  ctx: RequestContext,
+  onStageChange?: StageChangeCallback
+): Promise<PipelineResult> {
+  await emitStage("organizing", onStageChange);
+  const organized = await organizeOutput(
+    brief.campaign.id,
+    brief,
+    composited,
+    storage,
+    ctx
+  );
+  allErrors.push(...organized.errors);
+  allErrors.push(...organized.systemErrors.map(toPipelineError));
+
+  await emitStage("complete", onStageChange);
+
+  return {
+    campaignId: brief.campaign.id,
+    creatives: organized.creatives,
+    totalTimeMs: elapsedMs(ctx),
+    totalImages: organized.creatives.length,
+    errors: allErrors,
+  };
+}
+
+/**
+ * Convert an organizer system error into a PipelineError.
+ * System errors omit product/aspectRatio because they aren't tied to
+ * a specific creative — see PipelineError JSDoc for the contract.
+ */
+function toPipelineError(systemError: {
+  stage: string;
+  message: string;
+  retryable: boolean;
+}): PipelineError {
+  return {
+    stage: systemError.stage as PipelineError["stage"],
+    message: systemError.message,
+    retryable: systemError.retryable,
+  };
+}
+
+/**
+ * Emit a stage transition if a callback is provided.
+ *
+ * Null-guards inside the helper (not at each call site) because the pipeline
+ * has 7+ stage transitions — inlining the `if (callback)` check everywhere
+ * would be noise. The helper keeps callers clean: `await emitStage("generating", onStageChange)`.
+ *
+ * Async: awaits the callback result so async emitters (SSE, WebSocket,
+ * logging pipelines) complete before the pipeline advances to the next stage.
+ * A sync callback returning void resolves immediately with no overhead.
+ */
+async function emitStage(
   stage: PipelineStage,
   callback?: StageChangeCallback
-): void {
+): Promise<void> {
   if (callback) {
-    callback(stage);
+    await callback(stage);
   }
 }
 

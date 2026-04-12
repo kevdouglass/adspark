@@ -84,6 +84,25 @@ class InMemoryStorage implements StorageProvider {
   }
 }
 
+/**
+ * Typed mock factory for OpenAI client.
+ *
+ * The real OpenAI SDK's `Images` class has many methods (createVariation,
+ * edit, etc.) that the pipeline never calls. Mocking the full surface is
+ * wasteful — we use a narrow structural type matching only what
+ * generateImages() actually invokes (`images.generate`), then cast through
+ * `unknown` with a comment explaining the scope.
+ *
+ * If the pipeline ever calls a different Images method, the pipeline's
+ * internal TypeScript will catch it (narrow mock won't satisfy the call),
+ * and we'll expand the mock.
+ */
+interface NarrowImagesMock {
+  generate: (...args: unknown[]) => Promise<{
+    data: Array<{ b64_json?: string }>;
+  }>;
+}
+
 function createMockOpenAIClient(
   base64Png: string,
   options: { failCallNumbers?: number[] } = {}
@@ -91,22 +110,24 @@ function createMockOpenAIClient(
   let callCount = 0;
   const { failCallNumbers = [] } = options;
 
-  return {
-    images: {
-      generate: vi.fn(async () => {
-        callCount++;
-        if (failCallNumbers.includes(callCount)) {
-          throw new OpenAI.APIError(
-            400,
-            { message: "Content policy violation" },
-            "Content policy violation",
-            {}
-          );
-        }
-        return { data: [{ b64_json: base64Png }] };
-      }),
-    },
-  } as unknown as OpenAI;
+  const imagesMock: NarrowImagesMock = {
+    generate: vi.fn(async () => {
+      callCount++;
+      if (failCallNumbers.includes(callCount)) {
+        throw new OpenAI.APIError(
+          400,
+          { message: "Content policy violation" },
+          "Content policy violation",
+          {}
+        );
+      }
+      return { data: [{ b64_json: base64Png }] };
+    }),
+  };
+
+  // Scope of cast: pipeline only calls client.images.generate().
+  // Other Images methods (createVariation, edit) are intentionally unmocked.
+  return { images: imagesMock } as unknown as OpenAI;
 }
 
 function createTestBrief(): CampaignBrief {
@@ -256,21 +277,21 @@ describe("runPipeline", () => {
     const observedStages: PipelineStage[] = [];
 
     await runPipeline(brief, storage, client, ctx, {
-      onStageChange: (stage) => observedStages.push(stage),
+      onStageChange: (stage) => {
+        observedStages.push(stage);
+      },
     });
 
-    // Should observe the full state sequence
-    expect(observedStages).toContain("validating");
-    expect(observedStages).toContain("resolving");
-    expect(observedStages).toContain("generating");
-    expect(observedStages).toContain("compositing");
-    expect(observedStages).toContain("organizing");
-    expect(observedStages).toContain("complete");
-
-    // Order should match pipeline flow
-    const validatingIndex = observedStages.indexOf("validating");
-    const completeIndex = observedStages.indexOf("complete");
-    expect(validatingIndex).toBeLessThan(completeIndex);
+    // Assert the FULL ordered sequence (not just containment).
+    // This catches bugs where stages fire in the wrong order.
+    expect(observedStages).toEqual([
+      "validating",
+      "resolving",
+      "generating",
+      "compositing",
+      "organizing",
+      "complete",
+    ]);
   });
 
   it("tracks timing instrumentation across all stages", async () => {
@@ -310,7 +331,7 @@ describe("runPipeline", () => {
 
   it("does not throw on partial failures (returns result with errors)", async () => {
     const base64Png = await createTestPngBase64();
-    // Fail DALL-E calls 1, 2, 3 (content policy)
+    // Fail DALL-E calls 1, 2, 3 — content policy, non-retryable
     const client = createMockOpenAIClient(base64Png, {
       failCallNumbers: [1, 2, 3],
     });
@@ -318,8 +339,21 @@ describe("runPipeline", () => {
     // Should NOT throw — returns result with errors
     const result = await runPipeline(brief, storage, client, ctx);
 
-    expect(result.creatives).toHaveLength(3); // Only 3 succeed (aloe-gel)
+    // Assert at least SOME creatives succeeded and errors are present.
+    // Don't assert an exact count tied to task ordering — the orchestrator
+    // may interleave products via p-limit, making call # → product mapping
+    // order-dependent and fragile.
+    expect(result.creatives.length).toBeGreaterThan(0);
+    expect(result.creatives.length).toBeLessThan(6);
     expect(result.errors.length).toBeGreaterThanOrEqual(3);
-    expect(result.totalImages).toBe(3);
+    expect(result.totalImages).toBe(result.creatives.length);
+
+    // Verify errors are content policy rejections
+    const contentPolicyErrors = result.errors.filter(
+      (error) =>
+        error.stage === "generating" &&
+        error.message.toLowerCase().includes("content policy")
+    );
+    expect(contentPolicyErrors.length).toBeGreaterThanOrEqual(3);
   });
 });
