@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { generateImage, generateImages } from "@/lib/pipeline/imageGenerator";
 import type { GenerationTask } from "@/lib/pipeline/types";
-import type OpenAI from "openai";
+import OpenAI from "openai";
 
 // --- Test fixtures ---
 
@@ -133,12 +133,12 @@ describe("generateImage (single)", () => {
   });
 
   it("retries on 429 rate limit then succeeds", async () => {
-    const rateLimitError = Object.assign(new Error("Rate limited"), {
-      status: 429,
-    });
+    const rateLimitError = new OpenAI.APIError(
+      429, { message: "Rate limited" }, "Rate limited", {}
+    );
     const client = createMockClient({
       throwError: rateLimitError,
-      throwOnCall: 1, // fail first call, succeed second
+      throwOnCall: 1,
     });
 
     const result = await generateImage(client, TASK);
@@ -147,9 +147,8 @@ describe("generateImage (single)", () => {
   });
 
   it("does NOT retry on 400 content policy rejection", async () => {
-    const contentPolicyError = Object.assign(
-      new Error("Content policy violation"),
-      { status: 400 }
+    const contentPolicyError = new OpenAI.APIError(
+      400, { message: "Content policy violation" }, "Content policy violation", {}
     );
     const client = createMockClient({ throwError: contentPolicyError });
 
@@ -160,9 +159,9 @@ describe("generateImage (single)", () => {
   });
 
   it("retries on 500 server error", async () => {
-    const serverError = Object.assign(new Error("Server error"), {
-      status: 500,
-    });
+    const serverError = new OpenAI.APIError(
+      500, { message: "Server error" }, "Server error", {}
+    );
     const client = createMockClient({
       throwError: serverError,
       throwOnCall: 1,
@@ -201,7 +200,9 @@ describe("generateImages (batch)", () => {
           callCount++;
           // Fail the 3rd call with content policy (non-retryable)
           if (callCount === 3) {
-            throw Object.assign(new Error("Content policy"), { status: 400 });
+            throw new OpenAI.APIError(
+              400, { message: "Content policy" }, "Content policy", {}
+            );
           }
           return { data: [{ b64_json: VALID_PNG_B64 }] };
         }),
@@ -214,7 +215,7 @@ describe("generateImages (batch)", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0].stage).toBe("generating");
     expect(errors[0].retryable).toBe(false);
-    expect(errors[0].message).toBe("Content policy");
+    expect(errors[0].message).toContain("Content policy");
   });
 
   it("respects concurrency limit", async () => {
@@ -237,5 +238,36 @@ describe("generateImages (batch)", () => {
     await generateImages(tasks, client, 3); // limit to 3
 
     expect(maxConcurrent).toBeLessThanOrEqual(3);
+  });
+
+  it("returns empty results for empty task list (all assets cached)", async () => {
+    const client = createMockClient();
+    const { images, errors } = await generateImages([], client);
+
+    expect(images).toHaveLength(0);
+    expect(errors).toHaveLength(0);
+    expect(client.images.generate).not.toHaveBeenCalled();
+  });
+
+  it("handles total failure — 0 succeed, 6 fail", async () => {
+    // Use 400 (non-retryable) so test doesn't wait for retry delays
+    const client = {
+      images: {
+        generate: vi.fn(async () => {
+          throw new OpenAI.APIError(
+            400, { message: "Content policy" }, "Content policy", {}
+          );
+        }),
+      },
+    } as unknown as OpenAI;
+
+    const { images, errors } = await generateImages(tasks, client);
+
+    expect(images).toHaveLength(0);
+    expect(errors).toHaveLength(6);
+    errors.forEach((e) => {
+      expect(e.stage).toBe("generating");
+      expect(e.retryable).toBe(false); // 400 is not retryable
+    });
   });
 });

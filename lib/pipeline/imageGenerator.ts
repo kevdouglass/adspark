@@ -52,6 +52,8 @@ export async function generateImage(
     }
   );
 
+  // OpenAI SDK types `data` as optional (`data?: Array<Image>`), so the
+  // outer `?.` is required by TypeScript strict mode — not a type lie.
   const b64 = response.data?.[0]?.b64_json;
   if (!b64) {
     throw new ImageGenerationError(
