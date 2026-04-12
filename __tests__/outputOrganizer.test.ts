@@ -197,10 +197,20 @@ describe("organizeOutput", () => {
     const manifest = JSON.parse(manifestEntry!.data.toString("utf-8"));
     expect(manifest.requestId).toBe(TEST_REQUEST_CONTEXT.requestId);
     expect(manifest.campaignId).toBe("summer-2026-suncare");
-    expect(manifest.totalCreatives).toBe(6);
+    expect(manifest.totalImages).toBe(6);
+    expect(typeof manifest.totalTimeMs).toBe("number");
     expect(manifest.products).toHaveLength(2); // 2 products
     expect(manifest.products[0].creatives).toHaveLength(3); // 3 ratios per product
     expect(manifest.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    // Spec schema: creative entries use `ratio`, `path`, `model`, `textOverlay`
+    const firstCreative = manifest.products[0].creatives[0];
+    expect(firstCreative.ratio).toBeDefined();
+    expect(firstCreative.path).toBeDefined();
+    expect(firstCreative.thumbnailPath).toBeDefined();
+    expect(firstCreative.model).toBe("dall-e-3");
+    expect(firstCreative.textOverlay).toBe(TEST_BRIEF.campaign.message);
+    expect(firstCreative.generationTimeMs).toBeGreaterThan(0);
 
     expect(result.manifestPath).toBe("summer-2026-suncare/manifest.json");
   });
@@ -271,8 +281,8 @@ describe("organizeOutput", () => {
     );
     expect(manifestEntry).toBeDefined();
     const manifest = JSON.parse(manifestEntry!.data.toString("utf-8"));
-    expect(manifest.totalCreatives).toBe(5);
-    expect(manifest.errors.length).toBeGreaterThanOrEqual(1);
+    expect(manifest.totalImages).toBe(5);
+    expect(manifest.creativeErrors.length).toBeGreaterThanOrEqual(1);
   });
 
   it("handles empty creatives array — writes manifest with zero creatives", async () => {
@@ -286,6 +296,7 @@ describe("organizeOutput", () => {
 
     expect(result.creatives).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
+    expect(result.systemErrors).toHaveLength(0);
 
     // Manifest + brief should still be written
     expect(mockStorage.saved.size).toBe(2);
@@ -295,7 +306,7 @@ describe("organizeOutput", () => {
     const manifest = JSON.parse(
       mockStorage.saved.get("empty-campaign/manifest.json")!.data.toString("utf-8")
     );
-    expect(manifest.totalCreatives).toBe(0);
+    expect(manifest.totalImages).toBe(0);
     expect(manifest.products).toHaveLength(0);
   });
 
@@ -311,5 +322,75 @@ describe("organizeOutput", () => {
         TEST_REQUEST_CONTEXT
       )
     ).rejects.toThrow(OrganizationError);
+  });
+
+  it("sets OrganizationError.cause to underlying storage error", async () => {
+    mockStorage.failOnKey = "manifest.json";
+
+    let caughtError: unknown;
+    try {
+      await organizeOutput(
+        "summer-2026-suncare",
+        TEST_BRIEF,
+        allCreatives,
+        mockStorage,
+        TEST_REQUEST_CONTEXT
+      );
+    } catch (e) {
+      caughtError = e;
+    }
+
+    expect(caughtError).toBeInstanceOf(OrganizationError);
+    const orgError = caughtError as OrganizationError;
+    expect(orgError.cause).toBeInstanceOf(Error);
+    expect((orgError.cause as Error).message).toContain("Mock storage failure");
+  });
+
+  it("handles thumbnail generation failure — creative marked as error, not saved", async () => {
+    // Build a creative with an invalid (non-PNG) image buffer
+    // Sharp.resize() on garbage data will reject
+    const corruptCreative: Creative = {
+      product: {
+        name: "Corrupt Product",
+        slug: "corrupt-product",
+        description: "Test",
+        category: "sun protection",
+        keyFeatures: ["test"],
+        color: "#000000",
+        existingAsset: null,
+      },
+      aspectRatio: "1:1",
+      dimensions: createDimensions("1:1"),
+      prompt: "Test prompt",
+      imageBuffer: Buffer.from("this is not a png"),
+      generationTimeMs: 100,
+      compositingTimeMs: 50,
+    };
+
+    const result = await organizeOutput(
+      "corrupt-test",
+      TEST_BRIEF,
+      [corruptCreative],
+      mockStorage,
+      TEST_REQUEST_CONTEXT
+    );
+
+    expect(result.creatives).toHaveLength(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].product).toBe("corrupt-product");
+    expect(result.errors[0].aspectRatio).toBe("1:1");
+    expect(result.errors[0].stage).toBe("organizing");
+    expect(result.errors[0].message).toContain("Thumbnail generation failed");
+
+    // Neither creative nor thumbnail should be saved (thumbnail gen failed first)
+    expect(
+      Array.from(mockStorage.saved.keys()).some((k) =>
+        k.includes("corrupt-product")
+      )
+    ).toBe(false);
+
+    // Manifest + brief should still be written
+    expect(mockStorage.saved.has("corrupt-test/manifest.json")).toBe(true);
+    expect(mockStorage.saved.has("corrupt-test/brief.json")).toBe(true);
   });
 });

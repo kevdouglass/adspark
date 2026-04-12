@@ -27,6 +27,7 @@
  */
 
 import sharp from "sharp";
+import pLimit from "p-limit";
 import type {
   AspectRatio,
   CampaignBrief,
@@ -48,6 +49,14 @@ const THUMBNAIL_WIDTH = 400;
 /** WebP quality for thumbnails — balance of file size and visual quality */
 const THUMBNAIL_QUALITY = 80;
 
+/**
+ * Concurrency cap for Sharp thumbnail generation.
+ * Prevents memory spikes when processing large batches — each in-flight
+ * Sharp operation pins its source buffer in RAM. At 5 concurrent × ~8MB
+ * per 1080×1920 PNG = ~40MB peak, comfortable within Vercel's 1024MB limit.
+ */
+const THUMBNAIL_CONCURRENCY = 5;
+
 const CONTENT_TYPE_PNG = "image/png";
 const CONTENT_TYPE_WEBP = "image/webp";
 const CONTENT_TYPE_JSON = "application/json";
@@ -60,7 +69,10 @@ export interface OrganizeOutputResult {
   creatives: CreativeOutput[];
   manifestPath: string;
   briefPath: string;
+  /** Per-creative failures (product × aspectRatio tied) */
   errors: PipelineError[];
+  /** System-level failures not tied to a specific creative */
+  systemErrors: Array<{ stage: string; message: string; retryable: boolean }>;
 }
 
 interface StorageSaveTask {
@@ -84,10 +96,13 @@ interface SaveOutcome {
 /**
  * Generate a WebP thumbnail from a PNG creative buffer.
  * Resizes to THUMBNAIL_WIDTH while preserving aspect ratio.
+ *
+ * Uses `fit: 'inside'` to explicitly preserve aspect ratio without cropping —
+ * the output height is computed automatically from the source aspect ratio.
  */
 async function generateThumbnail(creativeBuffer: Buffer): Promise<Buffer> {
   return sharp(creativeBuffer)
-    .resize(THUMBNAIL_WIDTH)
+    .resize(THUMBNAIL_WIDTH, undefined, { fit: "inside" })
     .webp({ quality: THUMBNAIL_QUALITY })
     .toBuffer();
 }
@@ -115,12 +130,19 @@ function buildStorageKey(
 // ADS-003c: Manifest construction
 // ---------------------------------------------------------------------------
 
+/**
+ * Manifest schema — matches docs/architecture/image-processing.md spec.
+ * Fields: ratio (display format), dimensions (pixels), model, textOverlay,
+ * path, thumbnailPath, prompt, generationTimeMs, compositingTimeMs.
+ */
 interface ManifestCreative {
-  aspectRatio: AspectRatio;
+  ratio: AspectRatio;
   dimensions: string;
-  creativePath: string;
+  path: string;
   thumbnailPath: string;
   prompt: string;
+  model: string;
+  textOverlay: string;
   generationTimeMs: number;
   compositingTimeMs: number;
 }
@@ -135,20 +157,29 @@ interface Manifest {
   requestId: string;
   campaignId: string;
   generatedAt: string;
-  totalCreatives: number;
+  totalTimeMs: number;
+  totalImages: number;
   products: ManifestProduct[];
-  errors: PipelineError[];
+  /** Errors tied to specific creative failures (product × ratio) */
+  creativeErrors: PipelineError[];
+  /** System-level errors not tied to a specific creative (brief.json save, etc.) */
+  systemErrors: Array<{ stage: string; message: string; retryable: boolean }>;
 }
+
+const DALLE_MODEL_NAME = "dall-e-3";
 
 /**
  * Build a manifest JSON from successful creative outputs.
  * Groups creatives by product for client-friendly rendering.
+ * Matches the spec schema in docs/architecture/image-processing.md.
  */
 function buildManifest(
   campaignId: string,
   requestContext: RequestContext,
   creativeOutputs: CreativeOutput[],
-  errors: PipelineError[]
+  campaignMessage: string,
+  creativeErrors: PipelineError[],
+  systemErrors: Array<{ stage: string; message: string; retryable: boolean }>
 ): Manifest {
   const productMap = new Map<string, ManifestProduct>();
 
@@ -162,23 +193,31 @@ function buildManifest(
     }
 
     productMap.get(output.productSlug)!.creatives.push({
-      aspectRatio: output.aspectRatio,
+      ratio: output.aspectRatio,
       dimensions: output.dimensions,
-      creativePath: output.creativePath,
+      path: output.creativePath,
       thumbnailPath: output.thumbnailPath,
       prompt: output.prompt,
+      model: DALLE_MODEL_NAME,
+      textOverlay: campaignMessage,
       generationTimeMs: output.generationTimeMs,
       compositingTimeMs: output.compositingTimeMs,
     });
   }
 
+  const totalTimeMs = Math.round(
+    performance.now() - requestContext.startedAtPerfMs
+  );
+
   return {
     requestId: requestContext.requestId,
     campaignId,
     generatedAt: new Date().toISOString(),
-    totalCreatives: creativeOutputs.length,
+    totalTimeMs,
+    totalImages: creativeOutputs.length,
     products: Array.from(productMap.values()),
-    errors,
+    creativeErrors,
+    systemErrors,
   };
 }
 
@@ -209,12 +248,17 @@ export async function organizeOutput(
 ): Promise<OrganizeOutputResult> {
   const errors: PipelineError[] = [];
 
-  // Step 1: Generate thumbnails in parallel
+  // Step 1: Generate thumbnails with capped concurrency
+  // p-limit caps parallel Sharp operations to THUMBNAIL_CONCURRENCY to
+  // prevent memory spikes when processing large batches of creatives.
+  const thumbnailLimit = pLimit(THUMBNAIL_CONCURRENCY);
   const thumbnailResults = await Promise.allSettled(
-    creatives.map(async (creative) => ({
-      creative,
-      thumbnailBuffer: await generateThumbnail(creative.imageBuffer),
-    }))
+    creatives.map((creative) =>
+      thumbnailLimit(async () => ({
+        creative,
+        thumbnailBuffer: await generateThumbnail(creative.imageBuffer),
+      }))
+    )
   );
 
   // Step 2: Build save tasks from successful thumbnail generations
@@ -301,13 +345,10 @@ export async function organizeOutput(
     saveStatus.set(statusKey, existing);
 
     if (!succeeded) {
-      const errorMessage =
-        outcome?.error ??
-        (result.status === "rejected"
-          ? result.reason instanceof Error
-            ? result.reason.message
-            : "unknown"
-          : "unknown");
+      // The save task always resolves fulfilled (inner try/catch returns
+      // SaveOutcome). A rejected promise here would indicate a bug in the
+      // task wrapper itself — surface as "internal error".
+      const errorMessage = outcome?.error ?? "internal save wrapper failure";
       errors.push({
         product: task.creative.product.slug,
         aspectRatio: task.creative.aspectRatio,
@@ -318,49 +359,97 @@ export async function organizeOutput(
     }
   });
 
-  const creativeOutputs: CreativeOutput[] = [];
+  // Detect half-save state: flag orphaned files so the orchestrator knows
+  // the creative is not recoverable and the storage has leftover state.
+  // A creative must have BOTH creative.png AND thumbnail.webp saved to be usable.
   for (const creative of creatives) {
     const statusKey = `${creative.product.slug}:${creative.aspectRatio}`;
     const status = saveStatus.get(statusKey);
-    if (!status?.creativeSaved || !status?.thumbnailSaved) {
-      continue;
+    if (!status) continue;
+
+    const creativeSaved = status.creativeSaved;
+    const thumbnailSaved = status.thumbnailSaved;
+
+    if (creativeSaved && !thumbnailSaved) {
+      errors.push({
+        product: creative.product.slug,
+        aspectRatio: creative.aspectRatio,
+        stage: "organizing",
+        message: `Orphaned creative.png saved but thumbnail.webp failed — creative marked unusable`,
+        retryable: true,
+      });
+    } else if (!creativeSaved && thumbnailSaved) {
+      errors.push({
+        product: creative.product.slug,
+        aspectRatio: creative.aspectRatio,
+        stage: "organizing",
+        message: `Orphaned thumbnail.webp saved but creative.png failed — creative marked unusable`,
+        retryable: true,
+      });
     }
-
-    const creativePath = buildStorageKey(
-      campaignId,
-      creative.product.slug,
-      creative.aspectRatio,
-      "creative.png"
-    );
-    const thumbnailPath = buildStorageKey(
-      campaignId,
-      creative.product.slug,
-      creative.aspectRatio,
-      "thumbnail.webp"
-    );
-
-    creativeOutputs.push({
-      productName: creative.product.name,
-      productSlug: creative.product.slug,
-      aspectRatio: creative.aspectRatio,
-      dimensions: `${creative.dimensions.width}x${creative.dimensions.height}`,
-      creativePath,
-      thumbnailPath,
-      creativeUrl: await storage.getUrl(creativePath),
-      thumbnailUrl: await storage.getUrl(thumbnailPath),
-      prompt: creative.prompt,
-      generationTimeMs: creative.generationTimeMs,
-      compositingTimeMs: creative.compositingTimeMs,
-    });
   }
 
+  // Build CreativeOutput[] for successful pairs — parallelize getUrl() calls
+  // with Promise.all (originally called serially in a for-loop, now batched).
+  const successfulPairs = creatives.filter((creative) => {
+    const status = saveStatus.get(
+      `${creative.product.slug}:${creative.aspectRatio}`
+    );
+    return status?.creativeSaved === true && status?.thumbnailSaved === true;
+  });
+
+  const creativeOutputs: CreativeOutput[] = await Promise.all(
+    successfulPairs.map(async (creative): Promise<CreativeOutput> => {
+      const creativePath = buildStorageKey(
+        campaignId,
+        creative.product.slug,
+        creative.aspectRatio,
+        "creative.png"
+      );
+      const thumbnailPath = buildStorageKey(
+        campaignId,
+        creative.product.slug,
+        creative.aspectRatio,
+        "thumbnail.webp"
+      );
+
+      const [creativeUrl, thumbnailUrl] = await Promise.all([
+        storage.getUrl(creativePath),
+        storage.getUrl(thumbnailPath),
+      ]);
+
+      return {
+        productName: creative.product.name,
+        productSlug: creative.product.slug,
+        aspectRatio: creative.aspectRatio,
+        dimensions: `${creative.dimensions.width}x${creative.dimensions.height}`,
+        creativePath,
+        thumbnailPath,
+        creativeUrl,
+        thumbnailUrl,
+        prompt: creative.prompt,
+        generationTimeMs: creative.generationTimeMs,
+        compositingTimeMs: creative.compositingTimeMs,
+      };
+    })
+  );
+
   // Step 5: Build and save manifest.json LAST (reflects final state)
-  // Errors from thumbnail generation and storage saves are included in the manifest.
+  // creativeErrors are per-creative failures; systemErrors are collected below
+  // for events not tied to a specific creative (e.g., brief.json save failure).
+  const systemErrors: Array<{
+    stage: string;
+    message: string;
+    retryable: boolean;
+  }> = [];
+
   const manifest = buildManifest(
     campaignId,
     requestContext,
     creativeOutputs,
-    errors
+    brief.campaign.message,
+    errors,
+    systemErrors
   );
   const manifestPath = `${campaignId}/manifest.json`;
   const manifestBuffer = Buffer.from(
@@ -378,16 +467,16 @@ export async function organizeOutput(
   }
 
   // Step 6: Save brief.json copy for reproducibility
-  // Non-critical: failure is logged in errors[] but doesn't throw.
+  // Non-critical: failure is logged in systemErrors[] but doesn't throw.
+  // Use systemErrors (not creative errors) because this failure isn't tied
+  // to a specific product × aspectRatio pair.
   const briefPath = `${campaignId}/brief.json`;
   const briefBuffer = Buffer.from(JSON.stringify(brief, null, 2), "utf-8");
 
   try {
     await storage.save(briefPath, briefBuffer, CONTENT_TYPE_JSON);
   } catch (e) {
-    errors.push({
-      product: "_manifest",
-      aspectRatio: "1:1",
+    systemErrors.push({
       stage: "organizing",
       message: `Failed to save brief.json copy: ${e instanceof Error ? e.message : "unknown"}`,
       retryable: true,
@@ -399,6 +488,7 @@ export async function organizeOutput(
     manifestPath,
     briefPath,
     errors,
+    systemErrors,
   };
 }
 
