@@ -12,21 +12,28 @@
  *
  * The orchestrator manages pipeline state transitions and collects errors
  * for partial failure handling (see docs/architecture/orchestration.md).
+ *
+ * WHY inject `client: OpenAI` + `storage: StorageProvider`:
+ * - The orchestrator is a pure composition of domain functions.
+ * - Dependencies are injected by the API route via lib/api/services.ts.
+ * - This makes the orchestrator testable without real API keys or S3.
+ *
+ * See docs/adr/ADR-002-integration-architecture-direct-sdk-over-mcp.md
  */
 
+import type OpenAI from "openai";
 import type {
   CampaignBrief,
   PipelineResult,
   StorageProvider,
 } from "./types";
 
-// Placeholder — implementation in Checkpoint 1
+// TODO [ADS-004]: Orchestrate the full pipeline
 
 export async function runPipeline(
   _brief: CampaignBrief,
   _storage: StorageProvider,
-  _apiKey: string
+  _client: OpenAI
 ): Promise<PipelineResult> {
-  // TODO: Orchestrate the full pipeline
-  throw new Error("Not implemented — Checkpoint 1");
+  throw new Error("Not implemented — ADS-004");
 }

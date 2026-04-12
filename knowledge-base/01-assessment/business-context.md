@@ -282,6 +282,16 @@ From the assessment PDF: *"Please ensure that your solution reflects thoughtful 
 "API routes use a service setup layer — `lib/api/services.ts` — that creates the OpenAI client and storage provider once per request with validated env vars. This keeps routes thin (parse request, call pipeline, return response) and makes testing trivial — mock `getOpenAIClient()` and `getStorage()` to inject test doubles. All env validation happens once at the top via Zod, not scattered across pipeline modules."
 `[Source: ADS-028 ticket definition, orchestration.md env handling]`
 
+### Encryption & Security (Added Post-ADR-002 Review)
+
+**D-31** | *"How do you handle API key security?"*
+"Zero client-side exposure. No `NEXT_PUBLIC_` prefix on any secret — API keys and S3 credentials exist only in server-side API routes. Vercel encrypts env vars with AES-256 at rest. In local dev, `.env.local` is gitignored. All SDK calls (OpenAI, AWS) enforce HTTPS/TLS 1.2+ — no plaintext key transmission. Production: AWS Secrets Manager for key rotation without redeployment, and STS AssumeRole for short-lived credentials instead of long-lived access keys."
+`[Source: ADR-002 Encryption & Secrets Handling section, deployment.md]`
+
+**D-32** | *"What about the generated images — are they encrypted?"*
+"Three layers. In transit from DALL-E: HTTPS, and we use `b64_json` response format so image bytes arrive in the API response itself — no second HTTP call to a temporary URL. In memory: Buffer in the Node.js process, never written to temp files. At rest in S3: SSE-S3 (AES-256 server-side encryption) per-bucket. Pre-signed URLs are HTTPS and time-scoped (24hr). Production: CloudFront signed cookies eliminate URL leakage risk entirely."
+`[Source: ADR-002 Encryption table, b64_json trade-off decision]`
+
 ---
 
 ## Appendix: Key Contacts

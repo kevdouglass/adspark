@@ -277,6 +277,27 @@ The pipeline itself remains deterministic direct SDK calls. The Brand Triage Age
 - Adding a new image generation provider (Firefly, Midjourney) requires a code change in `imageGenerator.ts`, not a config change
 - No dynamic tool discovery for the pipeline (acceptable — the pipeline is deterministic)
 
+### Encryption & Secrets Handling
+
+| Concern | Approach | Notes |
+|---------|---------|-------|
+| **API keys at rest (Vercel)** | Vercel env vars are AES-256 encrypted at rest | Keys are decrypted only at function invocation time. Never in client bundles. |
+| **API keys at rest (local dev)** | `.env.local` on developer's machine, gitignored | Not encrypted on disk. Acceptable for POC — production: use a secret manager (Vault, AWS SSM). |
+| **API keys in transit** | All SDK calls use HTTPS (TLS 1.2+) by default | OpenAI SDK, AWS SDK both enforce HTTPS. No plaintext API key transmission. |
+| **S3 objects at rest** | SSE-S3 (AES-256 server-side encryption) | Enabled per-bucket. Generated images are encrypted on S3 at no extra cost. Set `ServerSideEncryption: 'AES256'` in PutObjectCommand. |
+| **S3 objects in transit** | Pre-signed URLs use HTTPS | Browser downloads over TLS. URLs are time-scoped (24hr) and key-scoped. |
+| **Pre-signed URL leakage risk** | URLs contain the S3 key path + signature — if intercepted, anyone can access the object until expiry | Mitigation: 24hr TTL (not permanent). Production: reduce to 1hr, add CloudFront signed cookies for stricter access control. |
+| **DALL-E generated images** | Transmitted over HTTPS from OpenAI → pipeline. Stored as `b64_json` in memory, never written to temp files. | No plaintext image data on disk during pipeline execution. |
+| **Client-side exposure** | No `NEXT_PUBLIC_` prefix on any secret. API keys, S3 credentials are server-side only. | React components never hold credentials — they call API routes which hold credentials server-side. |
+| **Git history** | `.env.example` has empty values only. `.gitignore` excludes `.env*` files. | If a key is accidentally committed, rotate immediately — git history is permanent. |
+
+**Production recommendations (beyond POC):**
+- AWS KMS customer-managed keys (CMK) for S3 encryption instead of SSE-S3
+- AWS Secrets Manager or HashiCorp Vault for API key rotation without redeployment
+- Short-lived IAM role credentials via STS AssumeRole instead of long-lived access keys
+- CloudFront signed cookies for image delivery (eliminates pre-signed URL leakage risk)
+- Content Credentials (C2PA) on generated images for AI provenance tracking (aligns with Adobe Firefly's approach)
+
 ### Operational Considerations
 
 **Vercel Cold Starts:** On Vercel Hobby, cold starts consume 2-4 seconds of the 60-second budget before any pipeline work begins. Mitigation: the 55-second client timeout and 30-second per-image DALL-E timeout leave buffer. For the demo, pre-warm by hitting the URL before recording the Loom video. Production: Vercel Pro has faster cold starts, or use a health-check ping (`GET /api/generate/health`) on a cron.

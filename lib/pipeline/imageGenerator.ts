@@ -4,18 +4,25 @@
  * Generates images for each product × aspect ratio combination. Uses Promise.all()
  * with p-limit for controlled concurrency (respects OpenAI rate limits).
  *
+ * WHY inject `client: OpenAI` instead of `apiKey: string`:
+ * - Dependency Inversion: the pipeline depends on an instantiated client,
+ *   not a primitive. The API route creates the client; the pipeline uses it.
+ * - Testability: tests inject a mock client, not a fake API key.
+ * - Configuration: timeout, maxRetries, baseURL are set once at client creation
+ *   (in lib/api/services.ts), not scattered across pipeline functions.
+ *
+ * See docs/adr/ADR-002-integration-architecture-direct-sdk-over-mcp.md
  * See docs/architecture/orchestration.md for retry policy and concurrency details.
  */
 
+import type OpenAI from "openai";
 import type { GeneratedImage, GenerationTask } from "./types";
 
-// Placeholder — implementation in Checkpoint 1
-// This will call openai.images.generate() with the task's prompt and dimensions
+// TODO [ADS-001]: Implement DALL-E 3 API calls with p-limit concurrency and retry
 
 export async function generateImages(
   _tasks: GenerationTask[],
-  _apiKey: string
+  _client: OpenAI
 ): Promise<GeneratedImage[]> {
-  // TODO: Implement DALL-E 3 API calls with p-limit concurrency and retry
-  throw new Error("Not implemented — Checkpoint 1");
+  throw new Error("Not implemented — ADS-001");
 }
