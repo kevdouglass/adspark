@@ -7,6 +7,11 @@ dist/
 build/
 .next/
 out/
+# TypeScript incremental build cache — regenerated on every `tsc --noEmit`
+tsconfig.tsbuildinfo
+
+# Claude Code local state
+.claude/scheduled_tasks.lock
 
 # Environment
 .env
