@@ -1,22 +1,216 @@
 /**
  * Text Overlay — Composites campaign message onto generated images.
  *
- * Uses @napi-rs/canvas for high-quality text rendering on a semi-transparent
- * band in the bottom 25% of each image.
+ * Uses Sharp for resize/crop and @napi-rs/canvas for text rendering.
+ * Layout: semi-transparent black band in the bottom 25% of the image,
+ * white centered text, word-wrapped to max 3 lines.
  *
- * See docs/architecture/image-processing.md for layout strategy and font details.
+ * WHY two libraries:
+ * - Sharp (libvips): fastest Node.js image library for pixel transforms
+ *   (resize, crop, format conversion) but has NO text rendering API.
+ * - @napi-rs/canvas (Skia): Canvas 2D API with high-quality font rendering,
+ *   measureText, and compositing. The Node.js equivalent of Python's Pillow ImageDraw.
+ *
+ * The flow: DALL-E buffer → Sharp resize → Canvas overlay text → PNG buffer
+ *
+ * See docs/architecture/image-processing.md for the full spec.
  */
 
+import sharp from "sharp";
+import { createCanvas, loadImage, type SKRSContext2D } from "@napi-rs/canvas";
 import type { ImageDimensions } from "./types";
 
-// Placeholder — implementation in Checkpoint 1
-// This will use @napi-rs/canvas to draw text on the image
+// ---------------------------------------------------------------------------
+// Constants — text overlay layout configuration
+// ---------------------------------------------------------------------------
 
-export async function overlayText(
-  _imageBuffer: Buffer,
-  _message: string,
-  _dimensions: ImageDimensions
+/** Band occupies the bottom 25% of the image */
+const BAND_HEIGHT_RATIO = 0.25;
+
+/** Semi-transparent black background for text legibility */
+const BAND_COLOR = "rgba(0, 0, 0, 0.6)";
+
+/** White text for maximum contrast on dark band */
+const TEXT_COLOR = "#FFFFFF";
+
+/** Font size scales with image width for responsive text across aspect ratios */
+const FONT_SIZE_DIVISOR = 20;
+
+/** Horizontal padding as a fraction of image width (5% on each side) */
+const PADDING_RATIO = 0.05;
+
+/** Maximum lines of text — prevents overflow outside the band */
+const MAX_LINES = 3;
+
+/** Line height multiplier relative to font size */
+const LINE_HEIGHT_MULTIPLIER = 1.3;
+
+// ---------------------------------------------------------------------------
+// ADS-002a: Word wrapping utility
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap text to fit within a maximum width using Canvas measureText.
+ *
+ * WHY manual word wrap: The Canvas 2D API has no built-in word wrapping.
+ * fillText() renders a single line — if the text is wider than the canvas,
+ * it overflows invisibly. We must measure each word, accumulate into lines,
+ * and break when the line exceeds maxWidth.
+ *
+ * The algorithm respects MAX_LINES: if the text would need more than 3 lines,
+ * the last line is truncated with "..." to signal overflow.
+ */
+function wrapText(
+  context: SKRSContext2D,
+  message: string,
+  maxWidth: number
+): string[] {
+  const words = message.split(" ");
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    const testLine = currentLine ? `${currentLine} ${word}` : word;
+    const metrics = context.measureText(testLine);
+
+    if (metrics.width > maxWidth && currentLine) {
+      // Current line is full — push it and start a new one
+      if (lines.length >= MAX_LINES - 1) {
+        // Last allowed line — truncate with ellipsis
+        lines.push(truncateWithEllipsis(context, currentLine, word, maxWidth));
+        return lines;
+      }
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = testLine;
+    }
+  }
+
+  // Push the final line
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines.slice(0, MAX_LINES);
+}
+
+/**
+ * Truncate the last line with "..." if remaining words don't fit.
+ */
+function truncateWithEllipsis(
+  context: SKRSContext2D,
+  currentLine: string,
+  nextWord: string,
+  maxWidth: number
+): string {
+  const candidate = `${currentLine} ${nextWord}...`;
+  if (context.measureText(candidate).width <= maxWidth) {
+    return candidate;
+  }
+  return `${currentLine}...`;
+}
+
+// ---------------------------------------------------------------------------
+// ADS-002c: Sharp resize from DALL-E dimensions to platform target
+// ---------------------------------------------------------------------------
+
+/**
+ * Resize a DALL-E output image to the target platform dimensions.
+ *
+ * DALL-E 3 outputs at fixed sizes (1024x1024, 1024x1792, 1792x1024)
+ * that don't match platform targets (1080x1080, 1080x1920, 1200x675).
+ *
+ * Uses cover fit + center crop:
+ * - cover: fills the entire target area, cropping excess (no letterboxing)
+ * - center: AI-generated images typically center their subject
+ *
+ * See docs/architecture/image-processing.md for the dimension mapping table.
+ */
+export async function resizeToTarget(
+  imageBuffer: Buffer,
+  dimensions: ImageDimensions
 ): Promise<Buffer> {
-  // TODO: Implement @napi-rs/canvas text compositing
-  throw new Error("Not implemented — Checkpoint 1");
+  return sharp(imageBuffer)
+    .resize(dimensions.width, dimensions.height, {
+      fit: "cover",
+      position: "center",
+    })
+    .png()
+    .toBuffer();
+}
+
+// ---------------------------------------------------------------------------
+// ADS-002b: Main text overlay function
+// ---------------------------------------------------------------------------
+
+/**
+ * Overlay a campaign message onto an image.
+ *
+ * Layout (see docs/architecture/image-processing.md):
+ * ┌──────────────────────────────┐
+ * │                              │
+ * │     (creative image)         │
+ * │                              │
+ * │  ┌────────────────────────┐  │
+ * │  │  CAMPAIGN MESSAGE      │  │  ← Bottom 25%
+ * │  │  Multi-line, centered  │  │  ← Semi-transparent band
+ * │  └────────────────────────┘  │
+ * └──────────────────────────────┘
+ *
+ * Steps:
+ * 1. Resize DALL-E output to target dimensions via Sharp (cover + center)
+ * 2. Create canvas at target dimensions
+ * 3. Draw resized image as background
+ * 4. Draw semi-transparent band
+ * 5. Word-wrap message, render centered white text
+ * 6. Export as PNG buffer
+ */
+export async function overlayText(
+  imageBuffer: Buffer,
+  message: string,
+  dimensions: ImageDimensions
+): Promise<Buffer> {
+  const { width, height } = dimensions;
+
+  // Step 1: Resize DALL-E output to target platform dimensions
+  const resizedBuffer = await resizeToTarget(imageBuffer, dimensions);
+
+  // Step 2: Create canvas at target dimensions
+  const canvas = createCanvas(width, height);
+  const context = canvas.getContext("2d");
+
+  // Step 3: Draw the resized image as background
+  const image = await loadImage(resizedBuffer);
+  context.drawImage(image, 0, 0, width, height);
+
+  // Step 4: Draw semi-transparent band in bottom 25%
+  const bandHeight = Math.round(height * BAND_HEIGHT_RATIO);
+  const bandY = height - bandHeight;
+  context.fillStyle = BAND_COLOR;
+  context.fillRect(0, bandY, width, bandHeight);
+
+  // Step 5: Configure text rendering
+  const fontSize = Math.round(width / FONT_SIZE_DIVISOR);
+  const padding = Math.round(width * PADDING_RATIO);
+  const maxTextWidth = width - padding * 2;
+  const lineHeight = Math.round(fontSize * LINE_HEIGHT_MULTIPLIER);
+
+  context.font = `bold ${fontSize}px sans-serif`;
+  context.fillStyle = TEXT_COLOR;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+
+  // Step 6: Word-wrap and render text
+  const lines = wrapText(context, message, maxTextWidth);
+  const totalTextHeight = lines.length * lineHeight;
+  const textStartY = bandY + (bandHeight - totalTextHeight) / 2;
+
+  lines.forEach((line, lineIndex) => {
+    const lineY = textStartY + lineIndex * lineHeight + lineHeight / 2;
+    context.fillText(line, width / 2, lineY);
+  });
+
+  // Step 7: Export as PNG
+  return canvas.toBuffer("image/png");
 }
