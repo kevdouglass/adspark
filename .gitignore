@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Review reports (generated, not committed)
+.review-reports/PR-*.html
+.review-reports/pr-findings/pr-*.json
+.review-reports/agent-metrics.json
+
+# Action tracker (local state, never committed)
+ACTION-TRACKER.md
+
+# Assessment emails (contain personal contact info)
+knowledge-base/01-assessment/email-*.md
+knowledge-base/01-assessment/round1-intel.md
+knowledge-base/01-assessment/business-context.html
+
+# Generated output (local dev)
+output/
+
+# Python (legacy, kept for safety)
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
