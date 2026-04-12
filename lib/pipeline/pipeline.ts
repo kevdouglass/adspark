@@ -70,8 +70,35 @@ export interface RunPipelineOptions {
 // Internal constants — sentinel values for system-level errors
 // ---------------------------------------------------------------------------
 
-/** Total pipeline timeout budget before we bail out with partial results (ms). */
-const PIPELINE_TIMEOUT_BUDGET_MS = 40_000;
+/**
+ * Total pipeline timeout budget before we bail out with partial results (ms).
+ *
+ * Calibrated for a 6-image demo brief (2 products × 3 aspect ratios)
+ * running against DALL-E 3 standard on OpenAI Tier 1:
+ *
+ *   - DALL-E 3 standard wall-clock: ~18-20s per image
+ *   - imageGenerator uses p-limit(5) — 5 images run in parallel (wave 1),
+ *     the 6th is queued behind them (wave 2)
+ *   - Wave 1: ~20s
+ *   - Wave 2 (1 image alone): ~20s
+ *   - Compositing (parallel @napi-rs/canvas): ~3s
+ *   - Organizing (S3/local writes + manifest): ~5s
+ *   - Network + overhead: ~2s
+ *   - TOTAL realistic wall-clock: ~45-50s
+ *
+ * 55 seconds gives us ~5s of headroom above that realistic max while
+ * staying safely below Vercel's 60s serverless hard limit. It also
+ * matches the frontend client's `DEFAULT_GENERATE_TIMEOUT_MS = 55_000`
+ * in `lib/api/client.ts` — so the pipeline budget and the HTTP client
+ * budget agree. Dropping below 45s risks tripping this check on a
+ * legitimate 6-image run and returning 5/6 creatives with a timeout
+ * error (seen in testing on Tier 1 DALL-E 3 quotas).
+ *
+ * If you need to raise this above 55s, you MUST also raise the client
+ * timeout AND negotiate with Vercel's 60s ceiling (Pro plan or
+ * streaming response). Don't just bump the constant in isolation.
+ */
+const PIPELINE_TIMEOUT_BUDGET_MS = 55_000;
 
 /**
  * Sentinel product slug for validation errors not tied to a specific product.
