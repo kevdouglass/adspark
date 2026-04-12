@@ -1,0 +1,185 @@
+/**
+ * Domain types for the AdSpark creative generation pipeline.
+ *
+ * These types define the data contracts between pipeline components.
+ * They have ZERO framework dependencies — no Next.js, no React, no AWS SDK.
+ * This is the domain layer: pure data structures that model the problem space.
+ */
+
+// ---------------------------------------------------------------------------
+// Input Types — What the user provides
+// ---------------------------------------------------------------------------
+
+export interface CampaignBrief {
+  campaign: Campaign;
+  products: Product[];
+  aspectRatios: AspectRatio[];
+  outputFormats: OutputFormats;
+}
+
+export const VALID_SEASONS = ["summer", "winter", "spring", "fall"] as const;
+export type Season = (typeof VALID_SEASONS)[number];
+
+export interface Campaign {
+  id: string;
+  name: string;
+  message: string;
+  targetRegion: string;
+  targetAudience: string;
+  tone: string;
+  season: Season;
+}
+
+export interface Product {
+  name: string;
+  slug: string;
+  description: string;
+  category: string;
+  keyFeatures: string[];
+  color: string;
+  existingAsset: string | null;
+}
+
+export type AspectRatio = "1:1" | "9:16" | "16:9";
+
+export interface OutputFormats {
+  creative: "png";
+  thumbnail: "webp";
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline Types — Internal state as creatives flow through the pipeline
+// ---------------------------------------------------------------------------
+
+/** A single image generation task for one product × one aspect ratio */
+export interface GenerationTask {
+  product: Product;
+  aspectRatio: AspectRatio;
+  prompt: string;
+  dimensions: ImageDimensions;
+}
+
+export interface ImageDimensions {
+  width: number;
+  height: number;
+  /**
+   * DALL-E 3 API size parameter. This is an infrastructure detail that lives
+   * in the domain type as a pragmatic trade-off for a POC — in production,
+   * this would move to the image generator layer and be derived from width/height.
+   * See docs/adr/ADR-001-nextjs-full-stack-typescript.md for context.
+   */
+  dalleSize: "1024x1024" | "1024x1792" | "1792x1024";
+}
+
+/** Result of DALL-E 3 image generation (before text overlay) */
+export interface GeneratedImage {
+  task: GenerationTask;
+  imageBuffer: Buffer;
+  generationTimeMs: number;
+}
+
+/** Final composited creative (after text overlay) */
+export interface Creative {
+  product: Product;
+  aspectRatio: AspectRatio;
+  dimensions: ImageDimensions;
+  prompt: string;
+  imageBuffer: Buffer;
+  thumbnailBuffer: Buffer;
+  generationTimeMs: number;
+  compositingTimeMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Output Types — What the pipeline returns
+// ---------------------------------------------------------------------------
+
+export interface PipelineResult {
+  campaignId: string;
+  creatives: CreativeOutput[];
+  totalTimeMs: number;
+  totalImages: number;
+  errors: PipelineError[];
+}
+
+export interface CreativeOutput {
+  productName: string;
+  productSlug: string;
+  aspectRatio: AspectRatio;
+  dimensions: string;
+  /** Storage key/path — always present regardless of storage mode */
+  creativePath: string;
+  /** Storage key/path — always present regardless of storage mode */
+  thumbnailPath: string;
+  /** Pre-signed URL for S3 mode. Undefined in local mode — use creativePath instead. */
+  creativeUrl?: string;
+  /** Pre-signed URL for S3 mode. Undefined in local mode — use thumbnailPath instead. */
+  thumbnailUrl?: string;
+  prompt: string;
+  generationTimeMs: number;
+  compositingTimeMs: number;
+}
+
+export interface PipelineError {
+  product: string;
+  aspectRatio: AspectRatio;
+  stage: PipelineStage;
+  message: string;
+  retryable: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// State Types — Pipeline progress tracking
+// ---------------------------------------------------------------------------
+
+export type PipelineStage =
+  | "validating"
+  | "resolving"
+  | "generating"
+  | "compositing"
+  | "organizing"
+  | "complete"
+  | "failed";
+
+export interface PipelineProgress {
+  stage: PipelineStage;
+  totalTasks: number;
+  completedTasks: number;
+  currentTask?: string;
+  errors: PipelineError[];
+}
+
+// ---------------------------------------------------------------------------
+// Storage Interface — Implemented by S3Storage and LocalStorage
+// ---------------------------------------------------------------------------
+
+export interface StorageProvider {
+  save(key: string, data: Buffer, contentType: string): Promise<string>;
+  exists(key: string): Promise<boolean>;
+  getUrl(key: string): Promise<string>;
+  load(key: string): Promise<Buffer | null>;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Maps aspect ratios to pixel dimensions and DALL-E 3 size parameters */
+export const ASPECT_RATIO_CONFIG: Record<AspectRatio, ImageDimensions> = {
+  "1:1": { width: 1080, height: 1080, dalleSize: "1024x1024" },
+  "9:16": { width: 1080, height: 1920, dalleSize: "1024x1792" },
+  "16:9": { width: 1200, height: 675, dalleSize: "1792x1024" },
+};
+
+export const DEFAULT_ASPECT_RATIOS: AspectRatio[] = ["1:1", "9:16", "16:9"];
+
+/**
+ * Path-safe folder names for each aspect ratio.
+ * Colons (1:1) are invalid in Windows paths and problematic in S3 keys.
+ * Use these for file/folder naming, not the display-format ratios.
+ */
+export const ASPECT_RATIO_FOLDER: Record<AspectRatio, string> = {
+  "1:1": "1x1",
+  "9:16": "9x16",
+  "16:9": "16x9",
+};
