@@ -346,6 +346,33 @@ describe("organizeOutput", () => {
     expect((orgError.cause as Error).message).toContain("Mock storage failure");
   });
 
+  it("persisted manifest accurately reflects brief.json save failure", async () => {
+    // brief.json fails but manifest.json succeeds — manifest on disk should
+    // include the brief failure in systemErrors, not show an empty array.
+    mockStorage.failOnKey = "brief.json";
+
+    const result = await organizeOutput(
+      "summer-2026-suncare",
+      TEST_BRIEF,
+      allCreatives,
+      mockStorage,
+      TEST_REQUEST_CONTEXT
+    );
+
+    // In-memory result has the systemError
+    expect(result.systemErrors).toHaveLength(1);
+    expect(result.systemErrors[0].message).toContain("Failed to save brief.json");
+
+    // On-disk manifest must ALSO reflect the brief failure (not lie about state)
+    const manifestEntry = mockStorage.saved.get(
+      "summer-2026-suncare/manifest.json"
+    );
+    expect(manifestEntry).toBeDefined();
+    const manifest = JSON.parse(manifestEntry!.data.toString("utf-8"));
+    expect(manifest.systemErrors).toHaveLength(1);
+    expect(manifest.systemErrors[0].message).toContain("brief.json");
+  });
+
   it("handles thumbnail generation failure — creative marked as error, not saved", async () => {
     // Build a creative with an invalid (non-PNG) image buffer
     // Sharp.resize() on garbage data will reject
