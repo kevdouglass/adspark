@@ -42,7 +42,8 @@ import {
   sanitizeErrorMessage,
   MAX_REQUEST_BODY_BYTES,
 } from "@/lib/api/errors";
-import type { GenerateSuccessResponse } from "@/lib/api/types";
+import type { ApiError } from "@/lib/api/types";
+import { toGenerateSuccessResponseBody } from "@/lib/api/mappers";
 
 /**
  * Read a Request body with a hard byte limit enforced at the stream level.
@@ -111,24 +112,20 @@ export async function POST(request: Request): Promise<Response> {
         `[${ctx.requestId}] MissingConfigurationError:`,
         error.message
       );
-      return NextResponse.json(
-        buildApiError(
-          "MISSING_CONFIGURATION",
-          "Server configuration error. Contact support with the requestId.",
-          ctx.requestId
-        ),
-        { status: 500 }
-      );
+      const errorBody = buildApiError(
+        "MISSING_CONFIGURATION",
+        "Server configuration error. Contact support with the requestId.",
+        ctx.requestId
+      ) satisfies ApiError;
+      return NextResponse.json(errorBody, { status: 500 });
     }
     console.error(`[${ctx.requestId}] Unexpected env validation error:`, error);
-    return NextResponse.json(
-      buildApiError(
-        "INTERNAL_ERROR",
-        sanitizeErrorMessage(error),
-        ctx.requestId
-      ),
-      { status: 500 }
-    );
+    const errorBody = buildApiError(
+      "INTERNAL_ERROR",
+      sanitizeErrorMessage(error),
+      ctx.requestId
+    ) satisfies ApiError;
+    return NextResponse.json(errorBody, { status: 500 });
   }
 
   // Finding #1 + #2 fix: Read body with stream-level byte limit.
@@ -138,23 +135,19 @@ export async function POST(request: Request): Promise<Response> {
   const bodyResult = await readBodyWithLimit(request, MAX_REQUEST_BODY_BYTES);
   if (!bodyResult.ok) {
     if (bodyResult.reason === "too_large") {
-      return NextResponse.json(
-        buildApiError(
-          "REQUEST_TOO_LARGE",
-          `Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`,
-          ctx.requestId
-        ),
-        { status: 413 }
-      );
-    }
-    return NextResponse.json(
-      buildApiError(
-        "INTERNAL_ERROR",
-        "Failed to read request body",
+      const errorBody = buildApiError(
+        "REQUEST_TOO_LARGE",
+        `Request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`,
         ctx.requestId
-      ),
-      { status: 500 }
-    );
+      ) satisfies ApiError;
+      return NextResponse.json(errorBody, { status: 413 });
+    }
+    const errorBody = buildApiError(
+      "INTERNAL_ERROR",
+      "Failed to read request body",
+      ctx.requestId
+    ) satisfies ApiError;
+    return NextResponse.json(errorBody, { status: 500 });
   }
 
   // Parse the JSON body (guarded — malformed JSON = 400, not 500)
@@ -162,28 +155,24 @@ export async function POST(request: Request): Promise<Response> {
   try {
     body = JSON.parse(bodyResult.text);
   } catch {
-    return NextResponse.json(
-      buildApiError(
-        "INVALID_JSON",
-        "Request body must be valid JSON",
-        ctx.requestId
-      ),
-      { status: 400 }
-    );
+    const errorBody = buildApiError(
+      "INVALID_JSON",
+      "Request body must be valid JSON",
+      ctx.requestId
+    ) satisfies ApiError;
+    return NextResponse.json(errorBody, { status: 400 });
   }
 
   // Validate the campaign brief schema via Zod
   const parseResult = parseBrief(body);
   if (!parseResult.success) {
-    return NextResponse.json(
-      buildApiError(
-        "INVALID_BRIEF",
-        "Campaign brief validation failed",
-        ctx.requestId,
-        parseResult.errors
-      ),
-      { status: 400 }
-    );
+    const errorBody = buildApiError(
+      "INVALID_BRIEF",
+      "Campaign brief validation failed",
+      ctx.requestId,
+      parseResult.errors
+    ) satisfies ApiError;
+    return NextResponse.json(errorBody, { status: 400 });
   }
 
   // Finding #4 fix: explicit type annotations instead of let inference
@@ -194,14 +183,12 @@ export async function POST(request: Request): Promise<Response> {
     storage = getStorage();
   } catch (error) {
     console.error(`[${ctx.requestId}] Service initialization failed:`, error);
-    return NextResponse.json(
-      buildApiError(
-        "MISSING_CONFIGURATION",
-        "Server configuration error. Contact support with the requestId.",
-        ctx.requestId
-      ),
-      { status: 500 }
-    );
+    const errorBody = buildApiError(
+      "MISSING_CONFIGURATION",
+      "Server configuration error. Contact support with the requestId.",
+      ctx.requestId
+    ) satisfies ApiError;
+    return NextResponse.json(errorBody, { status: 500 });
   }
 
   // Run the pipeline end-to-end
@@ -211,14 +198,12 @@ export async function POST(request: Request): Promise<Response> {
     // If the pipeline produced creatives, return 200 even with partial errors.
     // Partial failure is a successful response with error details — not an HTTP error.
     //
-    // `satisfies GenerateSuccessResponse` gives us compile-time proof that the
-    // wire format matches the public contract in lib/api/types.ts — any field
-    // drift between the pipeline and the contract is caught at build time.
+    // `toGenerateSuccessResponseBody` explicitly projects PipelineResult to
+    // the public wire shape (lib/api/types.ts). Fields are enumerated in the
+    // mapper, so future additions to PipelineResult do not auto-ship over
+    // the wire — the mapper IS the review gate. See ADR-006.
     if (result.creatives.length > 0) {
-      const successBody = {
-        ...result,
-        requestId: ctx.requestId,
-      } satisfies GenerateSuccessResponse;
+      const successBody = toGenerateSuccessResponseBody(result, ctx.requestId);
       return NextResponse.json(successBody, { status: 200 });
     }
 
@@ -226,41 +211,35 @@ export async function POST(request: Request): Promise<Response> {
     // The full error list is still included in the body for debugging.
     const firstError = result.errors[0];
     if (firstError) {
-      const { status, body: errorBody } = mapPipelineErrorToApiError(
+      const { status, body: mappedError } = mapPipelineErrorToApiError(
         firstError,
         ctx.requestId
       );
-      return NextResponse.json(
-        {
-          ...errorBody,
-          details: result.errors.map((e) => `[${e.stage}] ${e.message}`),
-        },
-        { status }
-      );
+      const errorBody = {
+        ...mappedError,
+        details: result.errors.map((e) => `[${e.stage}] ${e.message}`),
+      } satisfies ApiError;
+      return NextResponse.json(errorBody, { status });
     }
 
     // No creatives AND no errors — shouldn't happen, but surface as 500
-    return NextResponse.json(
-      buildApiError(
-        "INTERNAL_ERROR",
-        "Pipeline completed with no creatives and no errors",
-        ctx.requestId
-      ),
-      { status: 500 }
-    );
+    const errorBody = buildApiError(
+      "INTERNAL_ERROR",
+      "Pipeline completed with no creatives and no errors",
+      ctx.requestId
+    ) satisfies ApiError;
+    return NextResponse.json(errorBody, { status: 500 });
   } catch (error) {
     // Finding #7 fix: Sanitize catastrophic error messages.
     // OrganizationError and unhandled exceptions land here — the raw
     // error.message may contain stack traces, SDK internals, or secrets
     // echoed in URLs. Log the original server-side, send generic to client.
     console.error(`[${ctx.requestId}] Catastrophic pipeline error:`, error);
-    return NextResponse.json(
-      buildApiError(
-        "INTERNAL_ERROR",
-        sanitizeErrorMessage(error),
-        ctx.requestId
-      ),
-      { status: 500 }
-    );
+    const errorBody = buildApiError(
+      "INTERNAL_ERROR",
+      sanitizeErrorMessage(error),
+      ctx.requestId
+    ) satisfies ApiError;
+    return NextResponse.json(errorBody, { status: 500 });
   }
 }
