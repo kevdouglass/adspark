@@ -322,14 +322,19 @@ User                  React Dashboard          API Route              Pipeline  
 ### Timing Budget (60s Vercel Hobby Limit)
 
 ```
- 0s ─────── 2-4s ──────── 5s ───────────── 25s ──────── 28s ──── 30s ───── 32s
- │ cold     │ env +       │ resolve        │ overlay    │ S3     │ JSON    │
- │ start    │ parse       │ + generate     │ x6         │ upload │ response│
- │          │ brief       │ (parallel)     │            │        │         │
- └──────────┴─────────────┴────────────────┴────────────┴────────┴─────────┘
-                                                              Total: ~30-35s
-                                                              Buffer: ~25-30s
+ 0s ─────── 4s ──────── 5s ───────────── 27s ──────── 30s ──── 32s ───── 35s
+ │ cold     │ env +     │ resolve        │ overlay    │ S3     │ JSON    │
+ │ start    │ parse     │ + generate     │ x6         │ upload │ response│
+ │ (worst)  │ brief     │ (5 parallel    │            │(parallel)        │
+ │          │           │  + 1 queued)   │            │        │         │
+ └──────────┴───────────┴────────────────┴────────────┴────────┴─────────┘
+                                              Median total: ~30s  Buffer: ~30s
+                                              Worst-case total: ~40s  Buffer: ~20s
 ```
+
+**Why worst-case is ~40s, not 35s:** `p-limit(5)` means only 5 DALL-E calls fire concurrently. The 6th waits for the first to complete. If DALL-E is at its slow end (20s per image), the 6th image starts at ~20s and finishes at ~22s — adding ~2s to the generation phase. Combined with a worst-case cold start (4s), the total approaches 40s. The 20-second buffer is still comfortable for the 60s limit, but median (~30s) is the more realistic demo timing.
+
+**Memory budget note:** 6 concurrent `b64_json` responses at ~2-4 MB each = ~12-24 MB of base64 in flight. After decode to Buffer, peak memory is ~36-48 MB (base64 + decoded). With Sharp/Canvas overhead during compositing, peak is ~100-150 MB — well within Vercel's 1024 MB function memory limit.
 
 ---
 
@@ -342,8 +347,12 @@ What happens when each external service is unavailable:
 | **OpenAI API (full outage)** | All 6 `images.generate()` calls fail with 500/503 | "Generation failed — OpenAI service unavailable. Try again later." | `withRetry` exhausts 3 attempts per image, then surfaces `PipelineError` for each. `PipelineResult.creatives` = empty, `errors` = 6 entries. | Retry manually. No data loss — brief is stateless. |
 | **OpenAI API (rate limit, 429)** | Some/all calls get 429 | Transparent to user — retry handles it. May add 5-10s to total time. | `withRetry` does exponential backoff (1s → 2s → 4s). `p-limit(5)` prevents concurrent overload. If still 429 after 3 retries, surface as partial failure. | Automatic via retry. If persistent, reduce `OPENAI_CONCURRENCY` to 3. |
 | **OpenAI content policy (400)** | Specific image rejected | "1 of 6 images failed: content policy violation" + the other 5 display normally | No retry on 400. That image's `PipelineError.retryable = false`. Pipeline continues with remaining 5 images. Partial result returned. | User revises the campaign brief (adjust product description or tone) and regenerates the failed image. |
+| **OpenAI hung connection (30s timeout)** | `AbortSignal.timeout(30_000)` fires on the OpenAI client | Transparent — retry handles it. Adds ~30s to that image's time. | The 30s client timeout (set in `getOpenAIClient()`) kills the hung socket. `withRetry` treats it as retryable. If all 3 retries timeout, that image surfaces as `PipelineError`. Other parallel images are unaffected — `Promise.allSettled` isolates each. | Automatic via retry. If persistent (OpenAI regional outage), all 6 images fail after 3x30s = 90s per image — but `p-limit(5)` means only 5 are in flight, and the pipeline timeout budget (documented above) would abort the run before all retries exhaust. |
+| **DALL-E semantic failure ("garbage" output)** | Not detectable by the pipeline | User sees a technically valid image that is blurry, off-prompt, or nonsensical | DALL-E 3 can silently rewrite prompts and produce images that don't match the brief. There is no automated quality check in the POC — the image is valid bytes, passes all pipeline steps, and is saved to storage. | **Known limitation for POC.** User manually reviews output and re-generates. Production: add a CLIP similarity score (compare generated image against prompt embedding) or a moderation API pass. Flag images below a confidence threshold for human review. |
+| **Corrupt b64_json response** | `Buffer.from(b64, 'base64')` produces a corrupt/truncated buffer | Pipeline may crash during Sharp resize or Canvas overlay (invalid image data) | No validation between decode and first use. If the base64 is truncated (rare — OpenAI SDK validates response integrity), Sharp throws on `resize()`. `withRetry` does NOT help here — the API call "succeeded." | Wrap the decode + first Sharp operation in a try/catch. If Sharp throws on the buffer, mark as `PipelineError` and continue with remaining images. Production: validate image headers (PNG magic bytes) before processing. |
 | **S3 (write failure)** | `PutObjectCommand` throws | "Images generated but storage failed — retrying..." | Generated images are in memory (Buffer). Retry the save. If S3 is fully down, fall back to local `/tmp` storage (Vercel ephemeral) and return local URLs. | S3 outages are rare (<99.99% SLA). Fallback to ephemeral storage ensures the user sees their creatives even if persistence fails. |
-| **S3 (read failure — pre-signed URL)** | Browser gets 403/404 on image load | Broken image icon in gallery | This happens AFTER the pipeline succeeds. The pre-signed URL is valid but S3 can't serve the object. | Regenerate the pre-signed URL (it may have expired or the object was deleted). Frontend retry with fresh URL from `GET /api/campaigns/{id}`. |
+| **S3 (pre-signed URL expired)** | Browser gets 403 on image load. Error body contains `Request has expired`. | Broken image icon in gallery | This happens AFTER pipeline success. The 24hr TTL pre-signed URL has expired (user revisits the campaign the next day). The image still exists in S3 — only the URL is expired. | Frontend calls `GET /api/campaigns/{id}` to regenerate fresh pre-signed URLs. This route reads the manifest from S3 and produces new URLs. Production: shorten TTL to 1hr + CloudFront signed cookies for long-lived access. |
+| **S3 (object deleted/corrupted)** | Browser gets 404. Pre-signed URL is valid but object doesn't exist. | Broken image icon in gallery | Different from URL expiry — the image was deleted from S3 (manual error or lifecycle policy). The manifest still references it. | No automatic recovery — the image must be regenerated. Manifest.json serves as the audit trail of what was generated. Production: S3 versioning + lifecycle policy to prevent accidental deletion. |
 | **Network (user → Vercel)** | `fetch()` throws `TypeError` or `AbortError` (timeout) | "Network error — check your connection and try again." | Request never reaches the server. No pipeline execution. No cost. | Client-side retry. `AbortSignal.timeout(55_000)` prevents indefinite hang. |
 | **Vercel cold start + slow pipeline** | Total exceeds 60s | "Request timed out. The pipeline took too long." | Vercel kills the function. Any DALL-E calls in flight are orphaned (OpenAI still bills for them). No output saved. | Pre-warm the function before demo. Production: Vercel Pro (300s timeout) or move to a dedicated backend (Railway). |
 | **Env var missing (OPENAI_API_KEY)** | `validateEnv()` throws at route entry | `500: OPENAI_API_KEY is required` | Fail-fast. No pipeline execution. No API calls. No cost. | Developer adds the env var and redeploys. Clear error message tells exactly what's missing. |
@@ -417,7 +426,7 @@ Every pipeline stage emits a structured log entry:
 }
 ```
 
-For the POC, this is `console.log(JSON.stringify(...))` — Vercel captures stdout as structured logs automatically. Production: pipe to Datadog, CloudWatch, or OpenTelemetry collector.
+For the POC, this is `console.log(JSON.stringify(...))` — Vercel captures stdout from serverless functions but does **not** parse JSON fields for filtering/querying in its log UI. Structured field filtering (grep by `requestId`, filter by `stage`) requires a Vercel Log Drain piped to an external service (Datadog, Axiom). For the assessment demo, `console.log` is sufficient for post-mortem debugging. Production: OpenTelemetry collector → Datadog/CloudWatch.
 
 ### What Gets Logged (and What Doesn't)
 
@@ -464,6 +473,8 @@ Every successful pipeline run writes a `manifest.json` alongside the creatives (
 ```
 
 This manifest is what the D3 dashboard reads to render pipeline metrics (ADS-009). It's also what a client reviews in a post-engagement debrief: "Here's exactly what was generated, how long each step took, and what prompts were used."
+
+**Prompt IP tension:** The manifest stores the full `prompt` field in S3 alongside the creatives. For the POC this is valuable for debugging and demo transparency. In production, these prompts contain brand-specific style language, competitive positioning, and product angles that are client IP. Options: (1) hash the prompt in the manifest and store the full text in a separate access-controlled lookup, (2) omit the prompt from the manifest and log it only to the internal observability pipeline with a shorter TTL, (3) encrypt the prompt field at rest with a client-specific key. Recommended for V2: option 2 — prompt in observability logs (90-day retention), hash in manifest (permanent).
 
 ### Production Observability Path
 
