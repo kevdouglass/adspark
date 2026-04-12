@@ -35,21 +35,32 @@ export interface ApiError {
  *
  * Adding a new code is a non-breaking change.
  * Removing or renaming a code is a breaking change and requires version bump.
+ *
+ * The `CLIENT_*` codes are CLIENT-ORIGINATED — they are never produced by
+ * the pipeline or the server, and the server-side `mapPipelineErrorToApiError`
+ * exhaustive switch intentionally does NOT handle them. They exist so the
+ * frontend can distinguish "request never reached the server" (network,
+ * timeout) from "server rejected or errored" — different error-UI messaging.
  */
 export type ApiErrorCode =
-  // 400-class: client errors
+  // 400-class: client-supplied bad input (server-originated)
   | "INVALID_JSON"
   | "INVALID_BRIEF"
   | "REQUEST_TOO_LARGE"
   | "CONTENT_POLICY_VIOLATION"
-  // 500-class: server errors
+  // 500-class: server errors (server-originated)
   | "MISSING_CONFIGURATION"
   | "UPSTREAM_ERROR"
   | "UPSTREAM_RATE_LIMITED"
   | "UPSTREAM_TIMEOUT"
   | "STORAGE_ERROR"
   | "PROCESSING_ERROR"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  // Client-only: never produced server-side, never consumed by the pipeline
+  // error mapper. These let the UI distinguish network failures from server
+  // errors so retry/diagnostic messaging can differ.
+  | "CLIENT_NETWORK_ERROR"
+  | "CLIENT_TIMEOUT";
 
 /**
  * Request body size limit (50KB).
