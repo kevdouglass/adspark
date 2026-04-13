@@ -242,44 +242,66 @@ function CreativeCard({
     >
       {/* Image — the wrapper uses the creative's REAL aspect ratio so
           the text overlay composited at the bottom of the image is
-          never cropped. `object-cover` on the <img> is safe because
-          the container matches the image's native aspect.
+          never cropped.
 
           WHY plain <img> instead of next/image:
+          - `next/image` with `unoptimized={true}` just renders an
+            <img> tag anyway, but adds a wrapper component that can
+            misbehave with signed URL query strings.
+          - The image optimizer would rewrite signed URLs through
+            `/_next/image?url=...&w=...&q=...`, stripping the signature
+            and producing a 403 from S3.
+          - Plain <img> is simpler and more predictable.
 
-          1. `next/image` with `unoptimized={true}` just renders an
-             <img> tag anyway, but adds a wrapper component with
-             prop validation and dev-mode strict-mode warnings about
-             undeclared remote hosts. That extra layer can introduce
-             surprising behavior with signed S3 URLs that have query
-             strings (like `?X-Amz-Signature=...`).
+          WHY `crossOrigin="anonymous"` IS REQUIRED here (this is the
+          edge case where the conventional wisdom "crossOrigin is for
+          canvas pixel reads only" doesn't apply):
 
-          2. The image optimizer would rewrite signed URLs through
-             `/_next/image?url=...&w=...&q=...`, which strips the
-             signature query params and produces a 403 from S3. That's
-             why we used `unoptimized` in the first place.
+          AWS S3 only emits CORS response headers (Access-Control-
+          Allow-Origin, etc.) when the REQUEST includes an `Origin`
+          header. This is a deliberate S3 bandwidth optimization —
+          they don't waste bytes on CORS responses for clients that
+          aren't doing cross-origin fetches.
 
-          3. For displaying images in <img> tags, no CORS handshake is
-             needed. The browser accepts cross-origin image responses
-             with valid `Content-Type: image/*` headers as long as the
-             bucket CORS allows GET (which ours does). The
-             `crossOrigin="anonymous"` attribute is only required when
-             you need CORS-readable image data in JavaScript (e.g.,
-             `<canvas>` pixel reads), which we don't.
+          Plain <img> WITHOUT crossOrigin does NOT send the Origin
+          header (no-CORS mode). So the response from S3 has:
+            - Content-Type: image/png ✓
+            - 200 OK ✓
+            - Valid PNG bytes ✓
+            - NO Access-Control-Allow-Origin ✗
 
-          4. `referrerPolicy="no-referrer"` prevents the browser from
-             leaking the Vercel domain in the `Referer` header on
-             cross-origin image fetches. Defensive for signed-URL
-             scenarios where some S3 configurations validate the
-             referer.
+          Modern Chromium's CORB (Cross-Origin Read Blocking) sees a
+          cross-origin response with no CORS handshake and blocks it
+          from the renderer process — even though the image bytes are
+          completely valid and would render fine same-origin.
 
-          5. `loading="lazy"` defers off-screen images until they're
-             needed. Native browser feature, no JS overhead.
+          Adding `crossOrigin="anonymous"` puts the request into CORS
+          mode, which:
+            1. Sends `Origin: <current page origin>` in the request
+            2. Triggers S3's CORS path
+            3. S3 responds with `Access-Control-Allow-Origin: *`
+               (matches our bucket CORS rule)
+            4. CORB sees the valid CORS handshake and allows the
+               response into the renderer
+            5. Image renders.
 
-          For more elaborate optimization (WebP conversion, responsive
-          srcsets, lazy hydration), Next.js's image pipeline would be
-          worth the complexity. For a take-home demo with signed S3
-          URLs, plain <img> is the simpler and more reliable choice.
+          Verified empirically with curl on 2026-04-12:
+            curl -sI "<presigned-url>"
+              → no CORS headers (no Origin sent)
+            curl -sI -H "Origin: http://localhost:3000" "<presigned-url>"
+              → Access-Control-Allow-Origin: *
+                Access-Control-Allow-Methods: GET, HEAD
+                Vary: Origin, ...
+
+          So yes — `crossOrigin="anonymous"` is most commonly needed
+          for canvas pixel reads, but it is ALSO needed here to
+          unblock CORB on cross-origin S3 responses where the bucket
+          is configured to only emit CORS headers when the request
+          includes an Origin header.
+
+          `referrerPolicy="no-referrer"` prevents leaking the Vercel
+          domain in the `Referer` header on cross-origin image fetches.
+          `loading="lazy"` defers off-screen images.
       */}
       <div
         className={`relative w-full overflow-hidden bg-[var(--surface)] ${aspectClass(creative.aspectRatio)}`}
@@ -289,6 +311,7 @@ function CreativeCard({
           src={imageSrc}
           alt={`${creative.productName} — ${platformLabel(creative.aspectRatio)}`}
           className="absolute inset-0 h-full w-full object-cover"
+          crossOrigin="anonymous"
           loading="lazy"
           referrerPolicy="no-referrer"
         />
