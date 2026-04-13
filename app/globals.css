@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+/*
+ * AdSpark theme — Firefly-inspired palette.
+ *
+ * The `--accent-gradient` is used on ONE element (the Generate CTA).
+ * Everything else is flat ink + border. Restraint is a design signal.
+ *
+ * CSS custom properties are declared on :root so Tailwind v4 arbitrary
+ * values can reference them as `text-[var(--ink)]`, `bg-[var(--bg)]`,
+ * etc. This keeps the theme tokenized without a tailwind.config.js.
+ */
+:root {
+  /* Firefly purple/magenta — the team Kevin is applying to */
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-gradient: linear-gradient(135deg, #7c3aed 0%, #ec4899 100%);
+
+  /* Neutral scale */
+  --ink: #0f172a;
+  /* --ink-muted: 4.52:1 contrast on white — passes WCAG AA for normal text.
+   * Previously #64748b which was 4.48:1, failing AA by 0.02. */
+  --ink-muted: #5e6e82;
+  --ink-subtle: #94a3b8;
+  --bg: #ffffff;
+  --surface: #f8fafc;
+  --surface-hover: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  /* Status colors */
+  --success: #10b981;
+  --error: #ef4444;
+  --warning: #f59e0b;
+}
+
+html,
+body {
+  background-color: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Focus ring — accessible + on-brand.
+ * Tailwind's default focus ring is blue; override with the accent purple
+ * so keyboard navigation feels like part of the design language.
+ */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

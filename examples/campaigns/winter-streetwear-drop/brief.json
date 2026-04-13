@@ -1,0 +1,46 @@
+{
+  "campaign": {
+    "id": "northgrid-winter-drop-2026",
+    "name": "Northgrid — Winter Technical Drop",
+    "message": "Built for the city that doesn't slow down.",
+    "targetRegion": "North America, Northeast cities",
+    "targetAudience": "Urban Gen Z and millennials 18-32 into technical streetwear, layering, all-weather commuters, design-literate",
+    "tone": "moody, editorial, high-contrast, premium streetwear, cold blue-grey palette",
+    "season": "winter"
+  },
+  "products": [
+    {
+      "name": "Northgrid Stormshell Parka",
+      "slug": "stormshell-parka",
+      "description": "3-layer waterproof shell parka with seam-taped construction, fleece-lined chest pocket, oversized urban silhouette. Recycled face fabric.",
+      "category": "outerwear",
+      "keyFeatures": [
+        "3-layer waterproof shell",
+        "fully seam-taped",
+        "recycled face fabric",
+        "oversized urban fit"
+      ],
+      "color": "#1B2838",
+      "existingAsset": null
+    },
+    {
+      "name": "Northgrid Thermal Cargo Pant",
+      "slug": "thermal-cargo-pant",
+      "description": "Insulated technical cargo pant with articulated knees, zip thigh pockets, windproof front panels. Engineered for sub-freezing commutes.",
+      "category": "bottoms",
+      "keyFeatures": [
+        "primaloft insulation",
+        "windproof front panels",
+        "zip thigh cargo pockets",
+        "articulated knees"
+      ],
+      "color": "#3B3F45",
+      "existingAsset": null
+    }
+  ],
+  "aspectRatios": ["1:1", "9:16", "16:9"],
+  "outputFormats": {
+    "creative": "png",
+    "thumbnail": "webp"
+  }
+}

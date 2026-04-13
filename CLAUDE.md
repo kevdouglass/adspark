@@ -105,6 +105,40 @@ React UI (components/) → API Routes (app/api/) → Pipeline (lib/pipeline/) �
 
 ---
 
+## Common Commands
+
+```bash
+npm run dev          # Next.js dev server (localhost:3000)
+npm run build        # Production build
+npm run start        # Run production build locally
+npm run lint         # next lint (ESLint + Next.js rules)
+npm run type-check   # tsc --noEmit — strict TypeScript check, no emit
+npm run test         # Vitest watch mode
+npm run test:run     # Vitest single run (use in CI / pre-commit)
+
+# Run a single test file
+npx vitest run __tests__/promptBuilder.test.ts
+
+# Run tests matching a name
+npx vitest run -t "builds 1:1 prompt"
+```
+
+**Storage mode toggle:** `STORAGE_MODE=local` (default) writes to `./output/` and serves via the files route; `STORAGE_MODE=s3` requires AWS credentials in env.
+
+---
+
+## Pipeline Timeout Budget (ADR-relevant — do not break this cascade)
+
+The pipeline runs inside Vercel's hard 60s function timeout. The budget is staggered so each layer fails *before* the layer above it, surfacing a typed error instead of an opaque platform timeout:
+
+```
+DALL-E call (per image)  →  Pipeline orchestrator (~50s)  →  API client (~55s)  →  Vercel function (60s hard cap)
+```
+
+Constants live in `lib/api/timeouts.ts`. **Known limitation:** DALL-E 3 Tier 1 p90 latency can exceed the per-image budget under load — documented in `app/api/generate/route.ts` and the README. If you adjust any value, update all three layers together and re-check `__tests__/generateRoute.test.ts`.
+
+---
+
 ## Module Structure
 
 ```
@@ -124,32 +158,39 @@ adspark/
 │   └── prompt-books/            # Reusable agent workflows
 ├── knowledge-base/              # Product knowledge base + assessment docs
 ├── app/                         # Next.js App Router
-│   ├── page.tsx                 # Dashboard: brief form + creative gallery + D3 charts
+│   ├── page.tsx                 # Dashboard (currently a stub — UI components not yet built)
 │   ├── layout.tsx               # Root layout
 │   ├── globals.css              # Global styles
-│   └── api/                     # API Route Handlers
-│       ├── generate/route.ts    # POST — runs pipeline, returns results
+│   └── api/                     # API Route Handlers (thin — delegate to lib/)
+│       ├── generate/route.ts    # POST — runs pipeline, returns CreativeManifest
 │       ├── upload/route.ts      # POST — pre-signed S3 URL for asset upload
-│       └── campaigns/[id]/route.ts  # GET — fetch campaign results
-├── components/                  # React UI components
-│   ├── BriefForm.tsx            # Campaign brief input form + asset upload
-│   ├── CreativeGallery.tsx      # Generated creative display grid
-│   ├── PipelineProgress.tsx     # Real-time generation progress
-│   └── D3Charts.tsx             # Pipeline metrics (D3.js, client component)
+│       ├── campaigns/[id]/route.ts  # GET — fetch campaign results
+│       └── files/[...path]/route.ts # GET — local-mode file server (ADS-011); guards against path traversal & symlink escape; bypasses Next.js static-build limitation
 ├── lib/                         # Core logic (framework-agnostic)
 │   ├── pipeline/                # Pipeline modules (ZERO Next.js/React imports)
 │   │   ├── briefParser.ts       # JSON parsing + Zod schema validation
 │   │   ├── assetResolver.ts     # S3/local lookup, route to DALL-E if missing
 │   │   ├── promptBuilder.ts     # *** THE STAR *** Template-based prompt construction
-│   │   ├── imageGenerator.ts    # DALL-E 3 API, parallel generation, retry logic
+│   │   ├── imageGenerator.ts    # DALL-E 3 API, parallel generation (p-limit)
+│   │   ├── retry.ts             # Shared retry/backoff helper
 │   │   ├── textOverlay.ts       # @napi-rs/canvas text compositing
-│   │   ├── outputOrganizer.ts   # S3 upload or local filesystem save
-│   │   ├── pipeline.ts          # Orchestrator: compose all steps, manage state
+│   │   ├── outputOrganizer.ts   # Routes through storage abstraction
+│   │   ├── pipeline.ts          # Orchestrator: compose stages, enforce timeout budget
 │   │   └── types.ts             # Domain types (CampaignBrief, Product, Creative)
+│   ├── api/                     # API contract layer (bridges pipeline ↔ HTTP/UI)
+│   │   ├── types.ts             # Shared API contract types (ADS-027)
+│   │   ├── client.ts            # Frontend API client typed against GenerateFn (ADS-026)
+│   │   ├── errors.ts            # Discriminated typed errors (see ADR-003)
+│   │   ├── mappers.ts           # Request/response shape conversion
+│   │   ├── services.ts          # RequestContext / dependency injection
+│   │   └── timeouts.ts          # Staggered timeout budget constants (see section above)
+│   ├── hooks/                   # React hooks (only React-aware code in lib/)
+│   │   └── usePipelineState.tsx # MVI state hook (ADS-025, implements ADR-004)
 │   └── storage/                 # Storage abstraction
-│       ├── index.ts             # Factory: S3Storage | LocalStorage based on env
+│       ├── index.ts             # Factory: S3Storage | LocalStorage based on STORAGE_MODE
 │       ├── s3Storage.ts         # AWS S3 implementation
 │       └── localStorage.ts      # Filesystem fallback for local dev
+├── components/                  # (NOT YET CREATED — UI components are upcoming work)
 ├── __tests__/                   # Test files
 │   ├── briefParser.test.ts
 │   ├── promptBuilder.test.ts
@@ -267,16 +308,39 @@ Header: max 72 chars, imperative present tense, lowercase, no period
 
 ---
 
+## Architecture Decision Records
+
+Read these before changing the corresponding subsystem — they capture the *why*:
+
+| ADR | Topic |
+|-----|-------|
+| ADR-001 | Next.js full-stack TypeScript (framework choice) |
+| ADR-002 | Direct OpenAI SDK integration (rejected MCP layer) |
+| ADR-003 | Typed error cause discriminants (see `lib/api/errors.ts`) |
+| ADR-004 | Frontend state management (drives `usePipelineState`) |
+| ADR-005 | Runtime schema validation with Zod |
+| ADR-006 | API wire format (parallel shapes vs. nested) |
+
+---
+
+## Environment Variables
+
+See `.env.example`. Required: `OPENAI_API_KEY`. Optional (only when `STORAGE_MODE=s3`): `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`, `S3_REGION`. Default `STORAGE_MODE=local`.
+
+---
+
 ## Key Reference Files
 
 | File | Purpose |
 |------|---------|
 | `knowledge-base/HOME.md` | Product knowledge base index |
 | `knowledge-base/01-assessment/` | Assessment brief, emails, Round 1 intel |
-| `ACTION-TRACKER.md` | Current task status |
+| `ACTION-TRACKER.md` | Current task status (gitignored — keep updated as you work) |
 | `CONTRIBUTING.md` | Contribution guide |
 | `docs/prompt-books/` | Reusable agent workflows |
 | `docs/adr/` | Architecture decision records |
 | `docs/architecture/` | Architecture pattern docs |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR checklist |
 | `review-config.yml` | Review pipeline configuration |
+
+> **Note:** No `.github/workflows/` exists yet — there is no CI. `npm run type-check && npm run test:run && npm run lint` is the local pre-merge gate.

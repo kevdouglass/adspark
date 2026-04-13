@@ -25,6 +25,46 @@ import type {
 import { withRetry, isRetryableOpenAIError } from "./retry";
 
 /**
+ * Maximum number of concurrent DALL-E 3 requests.
+ *
+ * OpenAI DALL-E 3 Tier 1 quota is ~5 images per minute. Running 5 in
+ * parallel per batch means a 6-image brief splits into two waves of
+ * 5+1, which is the calibration baseline for `PIPELINE_BUDGET_MS` in
+ * `lib/api/timeouts.ts`. If you change this value, recompute that
+ * budget — the pipeline.ts JSDoc references this constant explicitly
+ * so a diff here forces re-review of the timing math.
+ *
+ * Tier 2+ accounts can raise this to 10+ for single-wave generation
+ * of 6-image briefs, which cuts wall-clock roughly in half. For a POC
+ * targeting Tier 1 quotas, 5 is the safe ceiling.
+ */
+export const DALLE_CONCURRENCY_LIMIT = 5;
+
+/**
+ * Retry base delay (ms). Exponential backoff: attempt 1 fail → wait
+ * 12s, attempt 2 fail → wait 24s, attempt 3 → throw.
+ *
+ * **Why 12 seconds and not 500ms:** OpenAI DALL-E 3 Tier 1 returns 429
+ * with a `Retry-After` header that is typically 12-60 seconds (one
+ * rate-limit bucket refill). At the previous 500ms base, both retries
+ * fired *inside* the rate-limit window, generated two more 429s, and
+ * exhausted all retries in ~1.5s — making the retry logic effectively
+ * cosmetic against real Tier 1 rate spikes. 12s clears the typical
+ * Retry-After window on the first retry.
+ *
+ * Trade-off: a 429 followed by one retry now costs ~12s of pipeline
+ * budget instead of ~0.5s. With `PIPELINE_BUDGET_MS = 50_000`, a
+ * worst-case scenario is one image hitting two retries (~36s wall
+ * time) inside the 50s budget — tight but survivable. Most demo runs
+ * will not hit any retries and pay zero overhead.
+ *
+ * If you observe sustained 429 cascades on Tier 1, the right move is
+ * to lower `DALLE_CONCURRENCY_LIMIT` from 5 to 3, not to lower this
+ * delay — sleeping less just guarantees more 429s.
+ */
+export const DALLE_RETRY_BASE_DELAY_MS = 12_000;
+
+/**
  * Classify an upstream error into a typed PipelineErrorCause.
  *
  * This is where classification happens — at the error-producing site,
@@ -80,7 +120,7 @@ export async function generateImage(
       }),
     {
       maxAttempts: 3,
-      baseDelayMs: 1000,
+      baseDelayMs: DALLE_RETRY_BASE_DELAY_MS,
       shouldRetry: isRetryableOpenAIError,
     }
   );
@@ -120,21 +160,11 @@ export async function generateImage(
 }
 
 /**
- * Default parallelism for DALL-E 3 image generation.
- *
- * Calibrated for OpenAI Tier 1, which allows ~5 images/min. Raising
- * this risks a 429 on the Nth call; lowering it serializes work and
- * breaks the pipeline timeout budget math in `lib/api/timeouts.ts`
- * (which assumes wave 1 runs 5 images in parallel). Any change here
- * MUST be re-reconciled with `PIPELINE_BUDGET_MS`.
- */
-export const DALLE_CONCURRENCY_LIMIT = 5;
-
-/**
  * Generate images for all tasks in parallel with concurrency limiting.
  *
- * Uses p-limit(DALLE_CONCURRENCY_LIMIT) to respect OpenAI Tier 1 rate
- * limits. Uses Promise.allSettled so one failure doesn't kill the batch.
+ * Uses `p-limit(DALLE_CONCURRENCY_LIMIT)` to respect OpenAI Tier 1
+ * rate limits. Uses `Promise.allSettled` so one failure doesn't kill
+ * the batch.
  *
  * Returns both successful images AND typed errors for failed ones —
  * the caller (pipeline orchestrator) decides how to surface partial failures.

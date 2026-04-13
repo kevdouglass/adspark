@@ -245,29 +245,35 @@ export async function runPipeline(
     ...reusedImages,
   ];
 
-  // Timeout budget check — capture once to avoid mid-check race.
-  // NOTE: This check runs AFTER generation completes, so it cannot abort
-  // in-flight DALL-E calls. It protects the compositing + organizing stages
-  // from running when the total budget is already blown. True interruption
-  // requires plumbing an AbortSignal through generateImages — deferred to
-  // a future ticket (see docs/architecture/orchestration.md production path).
+  // Timeout budget warning — record an error for the audit trail when
+  // generation exceeds the budget, but DO NOT short-circuit compositing.
+  //
+  // Prior behavior: when the budget tripped, the pipeline discarded every
+  // successfully-generated image and returned zero creatives. The "partial
+  // results" message was a lie — the user paid for the DALL-E calls but
+  // received nothing. Even worse, compositing (~3s for 6 images in parallel)
+  // and organizing (~3s) are cheap, so skipping them saved almost no time
+  // while throwing away all of the expensive upstream work.
+  //
+  // New behavior: emit an upstream_timeout WARNING into the error list so
+  // it surfaces in the response for observability, but continue running
+  // compositing + organizing on whatever images did generate. The caller
+  // (API route) then decides how to present this — currently, any non-zero
+  // creatives count returns HTTP 200 with the errors embedded in the body.
+  //
+  // Production safety: the three-layer stagger (50s pipeline < 55s client
+  // < 60s Vercel) still protects the outer request. If compositing + organize
+  // take longer than the 5s stagger window, the client's AbortSignal fires
+  // and the user sees a clean CLIENT_TIMEOUT error. The worst case is strictly
+  // better than before — we never lose successfully-generated work.
   const elapsedAfterGeneration = elapsedMs(ctx);
   if (elapsedAfterGeneration > PIPELINE_TIMEOUT_BUDGET_MS) {
     allErrors.push({
       stage: "generating",
       cause: "upstream_timeout",
-      message: `Pipeline timeout budget exceeded (${elapsedAfterGeneration}ms > ${PIPELINE_TIMEOUT_BUDGET_MS}ms). Returning partial results without compositing/organizing.`,
+      message: `Pipeline timeout budget exceeded (${elapsedAfterGeneration}ms > ${PIPELINE_TIMEOUT_BUDGET_MS}ms). Continuing to composite and organize the ${allGeneratedImages.length} images that did generate.`,
       retryable: true,
     });
-    // Still write manifest for audit trail, even with 0 creatives
-    return await organizeAndReturn(
-      validatedBrief,
-      [],
-      allErrors,
-      storage,
-      ctx,
-      onStageChange
-    );
   }
 
   // ------------------------------------------------------------------------

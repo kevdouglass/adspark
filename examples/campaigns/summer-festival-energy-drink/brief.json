@@ -1,0 +1,46 @@
+{
+  "campaign": {
+    "id": "voltcraft-summer-festival-2026",
+    "name": "Voltcraft — Festival Season Activation",
+    "message": "All night. Every set. Zero crash.",
+    "targetRegion": "North America, festival circuit",
+    "targetAudience": "Gen Z and younger millennials 18-29, festival-goers, EDM and indie scene, energy drink and adaptogen-curious",
+    "tone": "high-energy, neon, electric, night-scene cinematic, vibrant gradients, motion-blur kinetic",
+    "season": "summer"
+  },
+  "products": [
+    {
+      "name": "Voltcraft Surge — Tropical Storm",
+      "slug": "voltcraft-surge-tropical",
+      "description": "200mg natural caffeine from green tea, 1g L-theanine, electrolyte blend, real fruit juice. Zero sugar, zero crash, festival-ready 12oz can.",
+      "category": "energy drink",
+      "keyFeatures": [
+        "200mg natural caffeine",
+        "1g L-theanine for clean focus",
+        "electrolyte blend",
+        "zero sugar, zero crash"
+      ],
+      "color": "#00E0FF",
+      "existingAsset": null
+    },
+    {
+      "name": "Voltcraft Glow — Berry Lightning",
+      "slug": "voltcraft-glow-berry",
+      "description": "Adaptogen-powered berry energy drink with ashwagandha, B-vitamin complex, real berry juice. Designed for sustained energy through long sets.",
+      "category": "energy drink",
+      "keyFeatures": [
+        "ashwagandha adaptogen",
+        "B-vitamin complex",
+        "real berry juice",
+        "sustained 6-hour energy"
+      ],
+      "color": "#FF2EC4",
+      "existingAsset": null
+    }
+  ],
+  "aspectRatios": ["1:1", "9:16", "16:9"],
+  "outputFormats": {
+    "creative": "png",
+    "thumbnail": "webp"
+  }
+}

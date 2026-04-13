@@ -1,0 +1,60 @@
+{
+  "campaign": {
+    "id": "lumen-spring-reset-2026",
+    "name": "Lumen — Spring Reset Collection",
+    "message": "Wake up your skin. Spring starts here.",
+    "targetRegion": "North America and EU",
+    "targetAudience": "Skincare-focused millennials and Gen X 25-44, ingredient-conscious, prefer clinical-but-natural brands",
+    "tone": "fresh, clean, dewy, soft-light studio, science-meets-botanical",
+    "season": "spring"
+  },
+  "products": [
+    {
+      "name": "Lumen Vitamin C Brightening Serum",
+      "slug": "vitamin-c-serum",
+      "description": "15% L-ascorbic acid serum with ferulic acid and vitamin E. Brightens, evens tone, fights early signs of aging. Vegan, dermatologist-tested.",
+      "category": "skincare serum",
+      "keyFeatures": [
+        "15% L-ascorbic acid",
+        "ferulic acid + vitamin E",
+        "vegan + dermatologist-tested",
+        "airless pump bottle"
+      ],
+      "color": "#F6C453",
+      "existingAsset": null
+    },
+    {
+      "name": "Lumen Hyaluronic Hydration Mist",
+      "slug": "hydration-mist",
+      "description": "Triple-weight hyaluronic acid mist with rose water and aloe. Layerable hydration boost for any time of day. Recyclable aluminum bottle.",
+      "category": "skincare mist",
+      "keyFeatures": [
+        "triple-weight hyaluronic acid",
+        "rose water + aloe",
+        "recyclable aluminum bottle",
+        "fragrance-free"
+      ],
+      "color": "#E8C4D0",
+      "existingAsset": null
+    },
+    {
+      "name": "Lumen Niacinamide Pore Refining Cream",
+      "slug": "niacinamide-cream",
+      "description": "10% niacinamide cream with zinc PCA and green tea extract. Refines pores, balances oil, calms redness. Lightweight gel-cream texture.",
+      "category": "skincare moisturizer",
+      "keyFeatures": [
+        "10% niacinamide",
+        "zinc PCA + green tea",
+        "gel-cream texture",
+        "non-comedogenic"
+      ],
+      "color": "#A8D5BA",
+      "existingAsset": null
+    }
+  ],
+  "aspectRatios": ["1:1", "9:16", "16:9"],
+  "outputFormats": {
+    "creative": "png",
+    "thumbnail": "webp"
+  }
+}

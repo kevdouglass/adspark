@@ -1,0 +1,27 @@
+{
+  "campaign": {
+    "id": "diagnostic-test",
+    "name": "Minimal Diagnostic Test",
+    "message": "Test",
+    "targetRegion": "North America",
+    "targetAudience": "Test audience",
+    "tone": "minimal",
+    "season": "summer"
+  },
+  "products": [
+    {
+      "name": "Test Product",
+      "slug": "test-product",
+      "description": "A simple red square for diagnostic testing",
+      "category": "test",
+      "keyFeatures": ["simple", "minimal"],
+      "color": "#FF0000",
+      "existingAsset": null
+    }
+  ],
+  "aspectRatios": ["1:1"],
+  "outputFormats": {
+    "creative": "png",
+    "thumbnail": "webp"
+  }
+}

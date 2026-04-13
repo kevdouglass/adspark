@@ -132,7 +132,11 @@ describe("generateImage (single)", () => {
     );
   });
 
-  it("retries on 429 rate limit then succeeds", async () => {
+  // 30s timeout matches the new DALLE_RETRY_BASE_DELAY_MS = 12_000
+  // (one retry sleeps 12s, plus headroom). Previously 5s when the
+  // base delay was 500ms. The retry delay was raised to clear OpenAI's
+  // typical Tier 1 Retry-After window (12-60s) — see imageGenerator.ts.
+  it("retries on 429 rate limit then succeeds", { timeout: 30_000 }, async () => {
     const rateLimitError = new OpenAI.APIError(
       429, { message: "Rate limited" }, "Rate limited", {}
     );
@@ -158,7 +162,8 @@ describe("generateImage (single)", () => {
     expect(client.images.generate).toHaveBeenCalledTimes(1);
   });
 
-  it("retries on 500 server error", async () => {
+  // 30s timeout — see the rate-limit retry test above for rationale.
+  it("retries on 500 server error", { timeout: 30_000 }, async () => {
     const serverError = new OpenAI.APIError(
       500, { message: "Server error" }, "Server error", {}
     );
