@@ -62,6 +62,21 @@ agents:
       - "**/*.spec.*"
       - "vitest.config.*"
 
+  deployment:
+    activation: auto
+    description: "Cloud platform operations — IAM provisioning, AWS S3 bucket config, Vercel env vars + deploys via REST API/CLI, secrets management, CI/CD, credential rotation, live deploy debugging. Different from `orchestration` (which reviews CODE patterns inside the app); this agent operates at the LAYER ABOVE the application — the cloud platforms themselves. Specialty in AWS S3 + Vercel."
+    file_patterns:
+      - "vercel.json"
+      - "next.config.ts"
+      - ".env*"
+      - "Dockerfile"
+      - "docker-compose*"
+      - ".github/workflows/**"
+      - "lib/storage/**"
+      - "docs/spikes/SPIKE-*-vercel-*.md"
+      - "docs/spikes/SPIKE-*-deploy*.md"
+      - "docs/architecture/deployment.md"
+
 # ── Model assignments ──
 # Sonnet for deep analysis on all agents. Opus for orchestrator synthesis.
 models:
@@ -72,6 +87,7 @@ models:
   orchestration: sonnet
   image-processing: sonnet
   testing: sonnet
+  deployment: sonnet
   default: sonnet
 
 # ── Ignore patterns ──
