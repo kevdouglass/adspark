@@ -687,23 +687,49 @@ export async function orchestrateBrief(
   const totalStart = performance.now();
   const notes: AgentReviewNote[] = [];
 
-  // Phase 1: Triage
+  // Phases 1 + 2: Triage and Draft run IN PARALLEL.
+  //
+  // These two phases are independent — Draft does NOT consume triage
+  // output. Only the Review phase below reads `triage.priorities`. The
+  // previous serial implementation waited ~2-3 seconds for Triage before
+  // even starting Draft, despite the two having no data dependency. The
+  // parallelization eliminates that wait at zero behavioral cost.
+  //
+  // Failure semantics are preserved:
+  //   - Triage failure is non-fatal (caught inside the .catch below),
+  //     reviewers proceed with default priorities.
+  //   - Draft failure is fatal (uncaught) — propagates up to the caller
+  //     because the draft is the foundation for everything downstream.
+  //
+  // Wall-time impact: orchestration goes from ~12s to ~9-10s per call.
+  // See `docs/spikes/SPIKE-002-pipeline-latency-audit.md` for the full
+  // backend audit and GitHub issue #59 / ADS-045 for the rationale.
   const triageStart = performance.now();
-  let triage: TriageResult;
-  try {
-    triage = await runTriage(client, userPrompt, existingBrief);
-  } catch (error) {
-    // Triage is non-critical — if it fails, we skip it and proceed
-    // with no priority guidance. The reviewers still work, just with
-    // generic instructions.
-    console.warn("[agents] triage failed, continuing without priorities:", error);
-    triage = {
-      rationale:
-        "Orchestrator triage unavailable — reviewers worked from default priorities.",
-      priorities: {},
-    };
-  }
-  const triageMs = Math.round(performance.now() - triageStart);
+  const draftStart = triageStart;
+
+  const [triage, draftBrief] = await Promise.all([
+    runTriage(client, userPrompt, existingBrief).catch((error): TriageResult => {
+      console.warn(
+        "[agents] triage failed, continuing without priorities:",
+        error
+      );
+      return {
+        rationale:
+          "Orchestrator triage unavailable — reviewers worked from default priorities.",
+        priorities: {},
+      };
+    }),
+    runDraft(client, userPrompt, existingBrief),
+  ]);
+
+  // Both timings are measured from the same start instant. Because they
+  // ran concurrently, the actual wall-clock cost is roughly
+  // max(triageMs, draftMs), not triageMs + draftMs. Both numbers are
+  // recorded in `phaseMs` so consumers can see the per-phase profile,
+  // but they should NOT be summed when computing total wall time.
+  const phaseEnd = performance.now();
+  const triageMs = Math.round(phaseEnd - triageStart);
+  const draftMs = Math.round(phaseEnd - draftStart);
 
   notes.push({
     agentId: "triage",
@@ -712,10 +738,6 @@ export async function orchestrateBrief(
     severity: "info",
   });
 
-  // Phase 2: Draft
-  const draftStart = performance.now();
-  const draftBrief = await runDraft(client, userPrompt, existingBrief);
-  const draftMs = Math.round(performance.now() - draftStart);
   notes.push({
     agentId: "campaign-manager",
     agentLabel: "Campaign Manager",
