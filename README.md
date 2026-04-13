@@ -5,7 +5,7 @@
 AdSpark turns a structured campaign brief (or a natural-language prompt) into publish-ready ad creatives across multiple aspect ratios. It uses DALL-E 3 for image generation, `@napi-rs/canvas` for text compositing, and a 4-phase multi-agent orchestrator (5 stakeholder agents) for brief refinement. Built as a production-lean take-home for the Adobe Forward Deployed AI Engineer (Firefly) role — not a toy.
 
 - **Live demo:** *(Vercel URL added on submission)*
-- **Loom walkthrough:** *(2-3 min video added on submission)*
+- **Loom walkthrough:** [Watch the 2-3 min demo](https://www.loom.com/share/5119df38db1948e6802abc2f493f27bb)
 - **Repo:** https://github.com/kevdouglass/adspark
 
 ---
