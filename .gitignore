@@ -38,6 +38,9 @@ knowledge-base/01-assessment/business-context.html
 # Generated output (local dev)
 output/
 
+# Demo script scratch file (scripts/demo.sh writes response bodies here)
+.demo-resp.json
+
 # Python (legacy, kept for safety)
 __pycache__/
 *.pyc
