@@ -51,67 +51,97 @@
  */
 
 /**
- * Vercel's hard upper bound for serverless function execution on the
- * Hobby plan. NOT a timeout we control — the platform kills the
- * function at exactly this point with no graceful shutdown.
+ * Vercel's hard upper bound for serverless function execution.
+ *
+ * **Updated from 60_000 → 300_000 for Vercel Pro tier.** The platform
+ * kills the function at exactly this point with no graceful shutdown.
+ *
+ * Tier reference:
+ *   - Hobby (Free):  60 seconds
+ *   - Pro ($20/mo):  300 seconds (5 minutes)   <-- current setting
+ *   - Enterprise:    900 seconds (15 minutes)
+ *
+ * Note: each route handler must ALSO declare `export const maxDuration = 300`
+ * to actually use the longer Pro duration. Without that export, Vercel
+ * falls back to the 60s default even on Pro. See:
+ *   - app/api/generate/route.ts
+ *   - app/api/orchestrate-brief/route.ts
+ *
+ * Reference: https://vercel.com/docs/functions/runtimes#max-duration
  */
-export const SERVERLESS_EXECUTION_BUDGET_MS = 60_000;
+export const SERVERLESS_EXECUTION_BUDGET_MS = 300_000;
 
 /**
  * Client-side `fetch` timeout via `AbortSignal.timeout()`.
  *
- * **Bumped from 55_000 → 58_000** to give the pipeline 3 additional
- * seconds for 6-image briefs on Tier 1 DALL-E. The previous 5-second
- * stagger from Vercel's 60_000 hard limit was conservative; we're
- * trading 3 seconds of safety margin for a higher chance that 6-image
- * briefs complete before the client aborts.
+ * **Bumped from 58_000 → 135_000 (2:15) for Vercel Pro.** Previously
+ * the value was 5 seconds below Vercel's 60s Hobby cap; with Pro's
+ * 300s ceiling we have plenty of headroom and can give the client
+ * a generous 2 minutes 15 seconds before aborting.
  *
- * Risk: if the pipeline takes ~58.5-59.5 seconds, the client will
- * receive the response just before Vercel's hard kill. The 2-second
- * remaining margin is tight but defensible for a demo. The server's
- * PIPELINE_BUDGET_MS check (50s) still fires first to surface a
- * graceful timeout error if the pipeline genuinely runs over budget.
+ * Why this specific value: the longest realistic brief (12 images:
+ * 4 products × 3 ratios) takes ~100-130 seconds on Tier 1 DALL-E
+ * with `DALLE_CONCURRENCY_LIMIT = 3` (4 sequential waves of 3 images
+ * each at ~25s per wave + ~10s for compositing/save). Adding 5
+ * seconds of safety margin gives 135s.
  *
  * Cascade after the bump:
- *   PIPELINE_BUDGET_MS         (50s) - server graceful timeout point
- *   CLIENT_REQUEST_TIMEOUT_MS  (58s) - client gives up   <-- bumped
- *   Vercel hard kill           (60s) - platform forced shutdown
+ *   PIPELINE_BUDGET_MS              (120s)  - server graceful timeout
+ *   CLIENT_REQUEST_TIMEOUT_MS       (135s)  - client gives up   <-- bumped
+ *   SERVERLESS_EXECUTION_BUDGET_MS  (300s)  - Vercel Pro hard kill
  *
- * For 1-3 image briefs (which fit in a single DALL-E wave at Tier 1),
- * this bump is invisible — they complete in 25-30s well under any
- * timeout. The bump only matters at the 6-image edge of the envelope.
+ * Inner stagger (PIPELINE → CLIENT): 15 seconds — generous, lets the
+ * server compose and send a typed 504 even on a slow Vercel function.
+ * Outer stagger (CLIENT → VERCEL): 165 seconds — huge margin, fine.
  *
- * If you need to push this higher, you must ALSO upgrade to Vercel
- * Pro (300s function duration cap). Until then, 58_000 is the maximum
- * value that leaves any safety margin against Vercel's 60s.
+ * For 1-3 image briefs (which fit in a single DALL-E wave), this
+ * bump is invisible — they complete in 25-30s well under any timeout.
  */
-export const CLIENT_REQUEST_TIMEOUT_MS = 58_000;
+export const CLIENT_REQUEST_TIMEOUT_MS = 135_000;
 
 /**
- * Server-side pipeline budget. 5 seconds below the client timeout
- * so the server can always complete its graceful partial-result
- * response BEFORE the client's AbortSignal fires. This stagger is
- * the reason we didn't set both constants to 55_000.
+ * Server-side pipeline budget.
  *
- * Realistic wall-clock math for a 6-image demo (2 products × 3 ratios)
- * assuming `DALLE_CONCURRENCY_LIMIT = 5` in `lib/pipeline/imageGenerator.ts`:
+ * **Bumped from 50_000 → 120_000 (2 min) for Vercel Pro.** Previously
+ * calibrated to 50s to fit inside Hobby's 60s cap with stagger; with
+ * Pro's 300s ceiling, we can give the pipeline 2 full minutes of
+ * server-side budget, which comfortably handles 6-9 image briefs at
+ * Tier 1 DALL-E + Tier 1 retry windows.
  *
- *   - Wave 1 (5 images in parallel, DALL-E 3 p75): ~22s
- *   - Wave 2 (1 image alone, p75): ~22s
- *   - Compositing (parallel canvas): ~3s
- *   - Organizing (storage writes + manifest): ~3s
- *   - Subtotal: ~50s
+ * Realistic wall-clock math for various brief sizes (Tier 1 DALL-E,
+ * `DALLE_CONCURRENCY_LIMIT = 3`, p75 latency ~22s per image):
  *
- * With 50s exactly = 50_000 we have NO headroom for the DALL-E p90 tail.
- * This is a known Tier 1 limitation — see the JSDoc on `PIPELINE_BUDGET_MS`
- * in `lib/pipeline/pipeline.ts` for the retry-budget trade-off. For
- * Tier 2+ accounts with faster p90 latency, this budget is comfortable.
+ *   1 image:          ~22s + ~3s composite  = ~25s   (1 wave)
+ *   3 images:         ~22s + ~3s            = ~25s   (1 wave)
+ *   6 images:         ~44s + ~5s            = ~49s   (2 waves of 3)
+ *   9 images:         ~66s + ~6s            = ~72s   (3 waves of 3)
+ *   12 images:        ~88s + ~7s            = ~95s   (4 waves of 3)
  *
- * If you need to push this higher without changing the stagger, you
- * must ALSO raise `CLIENT_REQUEST_TIMEOUT_MS` and negotiate Vercel's
- * 60s cap via the Pro plan (300s limit) or streaming responses.
+ * Add ~10-12s for the optional orchestration phase (multi-agent brief
+ * refinement) when the AI Brief Orchestrator is used. Add ~12s per
+ * 429 retry hit on a wave (rare with concurrency=3).
+ *
+ * 120s gives:
+ *   - Comfortable margin for 6-image briefs (49 + 12 = 61s used, 59s slack)
+ *   - Reliable 9-image briefs (72 + 12 = 84s used, 36s slack)
+ *   - Feasible 12-image briefs (95 + 12 = 107s used, 13s slack)
+ *
+ * Cascade:
+ *   PIPELINE_BUDGET_MS              (120s)  - this constant   <-- bumped
+ *   CLIENT_REQUEST_TIMEOUT_MS       (135s)  - 15s outer stagger
+ *   SERVERLESS_EXECUTION_BUDGET_MS  (300s)  - Vercel Pro cap (165s slack)
+ *
+ * The 15-second outer stagger to CLIENT_REQUEST_TIMEOUT_MS lets the
+ * server compose a typed 504 with a complete error envelope before the
+ * client gives up. The 165-second slack to Vercel's hard kill is huge
+ * — we're not even close to needing the full 5 minutes.
+ *
+ * If you ever exceed 120s of pipeline runtime in practice, the right
+ * fix is streaming responses (let the client see partial results as
+ * they complete), NOT raising this constant further. Bumping past 150s
+ * starts eating into UX patience.
  */
-export const PIPELINE_BUDGET_MS = 50_000;
+export const PIPELINE_BUDGET_MS = 120_000;
 
 /**
  * Server-side budget for the multi-agent brief orchestration endpoint

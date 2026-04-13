@@ -46,6 +46,26 @@ import type { ApiError } from "@/lib/api/errors";
 import { toGenerateSuccessResponseBody } from "@/lib/api/mappers";
 
 /**
+ * Maximum execution duration for this route handler.
+ *
+ * Vercel's default is 60 seconds (Hobby) or 300 seconds (Pro). The
+ * constant below MUST be declared explicitly even on Pro — without it,
+ * the route falls back to the 60s default. This export is read by
+ * Next.js + Vercel during build to configure the function.
+ *
+ * 300 seconds matches Vercel Pro's hard ceiling. The actual server-side
+ * pipeline budget is enforced by `PIPELINE_BUDGET_MS` in
+ * `lib/api/timeouts.ts` (currently 120s) — see that file for the full
+ * staggered cascade and the rationale for each layer.
+ *
+ * Hobby tier note: declaring `maxDuration = 300` on Hobby is harmless;
+ * Vercel silently caps it at 60s for Hobby plans.
+ *
+ * Reference: https://vercel.com/docs/functions/runtimes#max-duration
+ */
+export const maxDuration = 300;
+
+/**
  * Read a Request body with a hard byte limit enforced at the stream level.
  *
  * Unlike a Content-Length header check (which can be spoofed via chunked
