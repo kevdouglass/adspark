@@ -38,6 +38,7 @@ import type {
 } from "./types";
 import { ASPECT_RATIO_FOLDER } from "./types";
 import type { RequestContext } from "@/lib/api/services";
+import { LogEvents } from "@/lib/api/logEvents";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -309,8 +310,20 @@ export async function organizeOutput(
     saveTasks.map(async (task): Promise<SaveOutcome> => {
       try {
         await storage.save(task.key, task.data, task.contentType);
+        requestContext.log(LogEvents.StorageSave, {
+          key: task.key,
+          kind: task.kind,
+          bytes: task.data.byteLength,
+          product: task.creative.product.slug,
+          ratio: task.creative.aspectRatio,
+        });
         return { task, success: true };
       } catch (e) {
+        requestContext.log(LogEvents.StorageSaveFailed, {
+          key: task.key,
+          kind: task.kind,
+          errorType: e instanceof Error ? e.constructor.name : "unknown",
+        });
         return {
           task,
           success: false,
@@ -453,7 +466,15 @@ export async function organizeOutput(
 
   try {
     await storage.save(briefPath, briefBuffer, CONTENT_TYPE_JSON);
+    requestContext.log(LogEvents.BriefWrite, {
+      path: briefPath,
+      bytes: briefBuffer.byteLength,
+    });
   } catch (e) {
+    requestContext.log(LogEvents.BriefWriteFailed, {
+      path: briefPath,
+      errorType: e instanceof Error ? e.constructor.name : "unknown",
+    });
     systemErrors.push({
       stage: "organizing",
       message: `Failed to save brief.json copy: ${e instanceof Error ? e.message : "unknown"}`,
@@ -480,7 +501,16 @@ export async function organizeOutput(
 
   try {
     await storage.save(manifestPath, manifestBuffer, CONTENT_TYPE_JSON);
+    requestContext.log(LogEvents.ManifestWrite, {
+      path: manifestPath,
+      bytes: manifestBuffer.byteLength,
+      totalImages: manifest.totalImages,
+    });
   } catch (e) {
+    requestContext.log(LogEvents.ManifestWriteFailed, {
+      path: manifestPath,
+      errorType: e instanceof Error ? e.constructor.name : "unknown",
+    });
     throw new OrganizationError(
       `Failed to write manifest.json for campaign ${campaignId}`,
       { cause: e }

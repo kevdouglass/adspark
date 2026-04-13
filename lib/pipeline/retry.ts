@@ -5,6 +5,9 @@
  * - We need per-error-code control: retry 429/500, never retry 400 (content policy)
  * - We need to surface typed PipelineErrors, not generic SDK errors
  * - The SDK's maxRetries is all-or-nothing — no error classification
+ * - We need an AbortSignal seam so a pipeline-level budget timeout can
+ *   cancel an in-flight retry chain (the container has no Vercel 300s
+ *   function kill — the pipeline is now the outer boundary).
  *
  * See docs/architecture/orchestration.md for the full retry policy.
  */
@@ -15,9 +18,30 @@ export interface RetryConfig {
   maxAttempts: number;
   baseDelayMs: number;
   shouldRetry: (error: unknown) => boolean;
+  /**
+   * Optional abort signal. When it fires, any pending backoff sleep
+   * is cancelled immediately and the loop throws an AbortError —
+   * stopping wasted wall time on retries that will outlive the caller.
+   * The `fn()` itself is responsible for honoring the signal separately
+   * (OpenAI SDK accepts `{ signal }` on per-request options).
+   */
+  signal?: AbortSignal;
+  /**
+   * Optional per-attempt hook. Called once per attempt AFTER the
+   * attempt resolves (success or failure) but BEFORE the backoff
+   * sleep. Used by `imageGenerator.ts` to emit `dalle.retry.attempt`
+   * events into the structured log stream.
+   */
+  onAttempt?: (info: {
+    attempt: number;
+    error?: unknown;
+    willRetry: boolean;
+    nextDelayMs: number;
+  }) => void;
 }
 
-const DEFAULT_CONFIG: RetryConfig = {
+const DEFAULT_CONFIG: Required<Omit<RetryConfig, "signal" | "onAttempt">> &
+  Pick<RetryConfig, "signal" | "onAttempt"> = {
   maxAttempts: 3,
   baseDelayMs: 1000,
   // Default: fail fast. Callers must explicitly opt into retry by providing
@@ -30,15 +54,21 @@ const DEFAULT_CONFIG: RetryConfig = {
  * Execute a function with exponential backoff retry.
  *
  * Delay schedule: baseDelayMs * 2^(attempt-1)
- *   Attempt 1 failure → wait 1s → retry
- *   Attempt 2 failure → wait 2s → retry
+ *   Attempt 1 failure → wait baseDelayMs → retry
+ *   Attempt 2 failure → wait 2×baseDelayMs → retry
  *   Attempt 3 failure → throw (no delay taken on final attempt)
+ *
+ * Abort semantics: if `config.signal` fires at any point, the next
+ * backoff sleep is cancelled and the loop throws `AbortError`. An
+ * attempt already in flight is NOT interrupted by withRetry itself —
+ * that's the `fn()` author's responsibility (they forward the signal
+ * to their own fetch/SDK call).
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   config: Partial<RetryConfig> = {}
 ): Promise<T> {
-  const { maxAttempts, baseDelayMs, shouldRetry } = {
+  const { maxAttempts, baseDelayMs, shouldRetry, signal, onAttempt } = {
     ...DEFAULT_CONFIG,
     ...config,
   };
@@ -46,18 +76,28 @@ export async function withRetry<T>(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (signal?.aborted) {
+      throw abortError();
+    }
     try {
       return await fn();
     } catch (error) {
       lastError = error;
 
       const isLastAttempt = attempt === maxAttempts;
-      if (isLastAttempt || !shouldRetry(error)) {
+      const retryable = shouldRetry(error) && !signal?.aborted;
+      const willRetry = !isLastAttempt && retryable;
+      const nextDelayMs = willRetry
+        ? baseDelayMs * Math.pow(2, attempt - 1)
+        : 0;
+
+      onAttempt?.({ attempt, error, willRetry, nextDelayMs });
+
+      if (!willRetry) {
         throw error;
       }
 
-      const delay = baseDelayMs * Math.pow(2, attempt - 1);
-      await sleep(delay);
+      await sleepWithAbort(nextDelayMs, signal);
     }
   }
 
@@ -65,8 +105,40 @@ export async function withRetry<T>(
   throw lastError;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Sleep for `ms` milliseconds, or reject early with an AbortError
+ * if the signal fires during the wait. Centralizes the timer cleanup
+ * so a fired signal doesn't leak a pending setTimeout into the event
+ * loop (which would keep the Node process alive in the container).
+ */
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort);
+  });
+}
+
+/**
+ * Construct an AbortError in a way that satisfies both
+ * `error.name === "AbortError"` checks (used by `isRetryableOpenAIError`)
+ * and `DOMException`-based instanceof checks used by the Web Streams
+ * and Fetch standards. Node 20+ has `DOMException` globally.
+ */
+function abortError(): Error {
+  return new DOMException("Aborted by pipeline budget", "AbortError");
 }
 
 /**

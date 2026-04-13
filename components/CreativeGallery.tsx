@@ -311,7 +311,16 @@ function CreativeCard({
           src={imageSrc}
           alt={`${creative.productName} — ${platformLabel(creative.aspectRatio)}`}
           className="absolute inset-0 h-full w-full object-cover"
-          crossOrigin="anonymous"
+          // Only set crossOrigin for ABSOLUTE URLs (S3 pre-signed). Local
+          // mode serves from `/api/files/...` which is same-origin — setting
+          // crossOrigin="anonymous" for same-origin requests forces the
+          // browser into CORS mode and partitions the image cache between
+          // CORS and no-CORS fetches, so F5 reloads can miss their previous
+          // cache entries. The S3 case still needs it: S3 only emits CORS
+          // headers when the request carries an `Origin` header, and CORB
+          // blocks cross-origin responses without a CORS handshake (see
+          // the empirical curl evidence documented above).
+          crossOrigin={imageSrc.startsWith("http") ? "anonymous" : undefined}
           loading="lazy"
           referrerPolicy="no-referrer"
         />

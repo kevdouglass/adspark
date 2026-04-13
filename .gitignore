@@ -17,6 +17,7 @@ tsconfig.tsbuildinfo
 .env
 .env.local
 .env.*.local
+.env.docker
 
 # AWS local config (cors.json, scratch policies)
 .aws/

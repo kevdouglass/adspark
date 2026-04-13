@@ -118,6 +118,7 @@ const TEST_BRIEF: CampaignBrief = {
 const TEST_REQUEST_CONTEXT: RequestContext = {
   requestId: "test-request-uuid-1234",
   startedAtPerfMs: 0,
+  log: () => {},
 };
 
 // ---------------------------------------------------------------------------

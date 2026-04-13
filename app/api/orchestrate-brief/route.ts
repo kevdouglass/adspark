@@ -41,6 +41,7 @@ import {
   createRequestContext,
   validateRequiredEnv,
   MissingConfigurationError,
+  LogEvents,
 } from "@/lib/api/services";
 import { buildApiError, sanitizeErrorMessage } from "@/lib/api/errors";
 import type { ApiError } from "@/lib/api/errors";
@@ -108,6 +109,10 @@ async function readBodyWithLimit(
 
 export async function POST(request: Request): Promise<Response> {
   const ctx = createRequestContext();
+  ctx.log(LogEvents.RequestReceived, {
+    route: "/api/orchestrate-brief",
+    method: "POST",
+  });
 
   // Fail fast on missing config
   try {
@@ -260,8 +265,9 @@ export async function POST(request: Request): Promise<Response> {
   // typed UPSTREAM_TIMEOUT 504. See `lib/api/timeouts.ts`.
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
+    ctx.log(LogEvents.OrchestrateStart, { promptChars: userPrompt.length });
     const orchestration = await Promise.race([
-      orchestrateBrief(client, userPrompt, existingBrief),
+      orchestrateBrief(client, userPrompt, existingBrief, ctx),
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(
           () => reject(new Error(ORCHESTRATION_TIMEOUT_SENTINEL)),
@@ -269,6 +275,11 @@ export async function POST(request: Request): Promise<Response> {
         );
       }),
     ]);
+    ctx.log(LogEvents.RequestComplete, {
+      status: 200,
+      phaseMs: orchestration.phaseMs,
+      products: orchestration.brief.products.length,
+    });
     return NextResponse.json(
       {
         brief: orchestration.brief,
@@ -287,6 +298,11 @@ export async function POST(request: Request): Promise<Response> {
       `[${ctx.requestId}] Orchestration ${isTimeout ? "timed out" : "failed"}:`,
       error
     );
+    ctx.log(LogEvents.RequestFailed, {
+      status: isTimeout ? 504 : 502,
+      reason: isTimeout ? "upstream_timeout" : "upstream_error",
+      errorType: error instanceof Error ? error.constructor.name : "unknown",
+    });
     // No `details` parameter on the response below — raw error.message is
     // logged server-side with the requestId above. Leaking it to the client
     // would expose OpenAI SDK internals (model names, quota context, and

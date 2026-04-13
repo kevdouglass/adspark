@@ -35,6 +35,7 @@ import {
   createRequestContext,
   validateRequiredEnv,
   MissingConfigurationError,
+  LogEvents,
 } from "@/lib/api/services";
 import {
   buildApiError,
@@ -44,6 +45,7 @@ import {
 } from "@/lib/api/errors";
 import type { ApiError } from "@/lib/api/errors";
 import { toGenerateSuccessResponseBody } from "@/lib/api/mappers";
+import { PIPELINE_BUDGET_MS } from "@/lib/api/timeouts";
 
 /**
  * Maximum execution duration for this route handler.
@@ -117,6 +119,10 @@ export async function POST(request: Request): Promise<Response> {
   // Create request context FIRST so every response — including errors
   // that happen before any pipeline work — gets a correlation UUID.
   const ctx = createRequestContext();
+  ctx.log(LogEvents.RequestReceived, {
+    route: "/api/generate",
+    method: "POST",
+  });
 
   // Finding #9 fix: Validate required env vars FIRST — fail fast BEFORE
   // touching the request body. No point parsing JSON if we can't even
@@ -211,9 +217,51 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json(errorBody, { status: 500 });
   }
 
+  // Pipeline budget enforcement via AbortController.
+  //
+  // WHY this is load-bearing in container mode:
+  //
+  // On Vercel, the 300s function ceiling was the real kill switch —
+  // even if the pipeline's internal budget check (`elapsed > PIPELINE_BUDGET_MS`)
+  // only fires AFTER generateImages resolves, the platform guaranteed
+  // nothing ran forever. In a long-running container there is no such
+  // backstop. A retry cascade behind a 12s exponential backoff × 3
+  // attempts × 30s SDK timeout per attempt can legitimately burn
+  // ~126s per image with nothing to stop it.
+  //
+  // The AbortController fires at exactly PIPELINE_BUDGET_MS (120s) and
+  // propagates through:
+  //   runPipeline(options.signal) →
+  //     generateImages(signal) →
+  //       generateImage(signal) →
+  //         client.images.generate({...}, { signal })  (undici-level cancel)
+  //         withRetry({ signal })                       (cancels pending sleep)
+  //
+  // The result is that a runaway request is cancelled everywhere it
+  // could be sitting — in the HTTP call, in the retry sleep, and in
+  // the next retry attempt — within a single event-loop tick of the
+  // timer firing. Without this, the container has no upper bound on
+  // request duration and the client's AbortSignal.timeout(135s) is
+  // the only defense; with this, the 135s client timeout becomes the
+  // safety net behind a 120s server-side preemption.
+  //
+  // The timer is cleared in the `finally` block so a successful
+  // request does not leak a pending setTimeout (which would keep the
+  // event loop alive for no reason and, in a container, inflate the
+  // graceful-shutdown window).
+  const controller = new AbortController();
+  const pipelineBudgetTimer = setTimeout(() => {
+    ctx.log(LogEvents.PipelineBudgetAbort, {
+      budgetMs: PIPELINE_BUDGET_MS,
+    });
+    controller.abort();
+  }, PIPELINE_BUDGET_MS);
+
   // Run the pipeline end-to-end
   try {
-    const result = await runPipeline(parseResult.brief, storage, client, ctx);
+    const result = await runPipeline(parseResult.brief, storage, client, ctx, {
+      signal: controller.signal,
+    });
 
     // If the pipeline produced creatives, return 200 even with partial errors.
     // Partial failure is a successful response with error details — not an HTTP error.
@@ -224,6 +272,12 @@ export async function POST(request: Request): Promise<Response> {
     // the wire — the mapper IS the review gate. See ADR-006.
     if (result.creatives.length > 0) {
       const successBody = toGenerateSuccessResponseBody(result, ctx.requestId);
+      ctx.log(LogEvents.RequestComplete, {
+        status: 200,
+        creatives: result.creatives.length,
+        errors: result.errors.length,
+        totalMs: result.totalTimeMs,
+      });
       return NextResponse.json(successBody, { status: 200 });
     }
 
@@ -239,6 +293,12 @@ export async function POST(request: Request): Promise<Response> {
         ...mappedError,
         details: result.errors.map((e) => `[${e.stage}] ${e.message}`),
       } satisfies ApiError;
+      ctx.log(LogEvents.RequestComplete, {
+        status,
+        creatives: 0,
+        errors: result.errors.length,
+        code: mappedError.code,
+      });
       return NextResponse.json(errorBody, { status });
     }
 
@@ -255,6 +315,10 @@ export async function POST(request: Request): Promise<Response> {
     // error.message may contain stack traces, SDK internals, or secrets
     // echoed in URLs. Log the original server-side, send generic to client.
     console.error(`[${ctx.requestId}] Catastrophic pipeline error:`, error);
+    ctx.log(LogEvents.RequestFailed, {
+      errorType: error instanceof Error ? error.constructor.name : "unknown",
+      message: error instanceof Error ? error.message : String(error),
+    });
 
     // Issue #59 follow-up — surface SAFE error metadata to the client so the
     // browser network tab can show enough to diagnose without leaking
@@ -289,5 +353,11 @@ export async function POST(request: Request): Promise<Response> {
       errorMeta.length > 0 ? errorMeta : undefined
     ) satisfies ApiError;
     return NextResponse.json(errorBody, { status: 500 });
+  } finally {
+    // Clear the pipeline-budget timer on every exit path so a successful
+    // request does not leak a pending setTimeout into the event loop.
+    // A lingering timer would keep the Node process alive long enough
+    // to inflate the graceful-shutdown window in a container.
+    clearTimeout(pipelineBudgetTimer);
   }
 }
