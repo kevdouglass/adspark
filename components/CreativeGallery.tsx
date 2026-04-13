@@ -41,7 +41,6 @@
 
 "use client";
 
-import Image from "next/image";
 import { usePipelineState } from "@/lib/hooks/usePipelineState";
 import type { ApiCreativeOutput } from "@/lib/api/types";
 import type { AspectRatio } from "@/lib/pipeline/types";
@@ -243,41 +242,55 @@ function CreativeCard({
     >
       {/* Image — the wrapper uses the creative's REAL aspect ratio so
           the text overlay composited at the bottom of the image is
-          never cropped. `object-cover` on the <Image> is still safe
-          because the container matches the image's native aspect. */}
+          never cropped. `object-cover` on the <img> is safe because
+          the container matches the image's native aspect.
+
+          WHY plain <img> instead of next/image:
+
+          1. `next/image` with `unoptimized={true}` just renders an
+             <img> tag anyway, but adds a wrapper component with
+             prop validation and dev-mode strict-mode warnings about
+             undeclared remote hosts. That extra layer can introduce
+             surprising behavior with signed S3 URLs that have query
+             strings (like `?X-Amz-Signature=...`).
+
+          2. The image optimizer would rewrite signed URLs through
+             `/_next/image?url=...&w=...&q=...`, which strips the
+             signature query params and produces a 403 from S3. That's
+             why we used `unoptimized` in the first place.
+
+          3. For displaying images in <img> tags, no CORS handshake is
+             needed. The browser accepts cross-origin image responses
+             with valid `Content-Type: image/*` headers as long as the
+             bucket CORS allows GET (which ours does). The
+             `crossOrigin="anonymous"` attribute is only required when
+             you need CORS-readable image data in JavaScript (e.g.,
+             `<canvas>` pixel reads), which we don't.
+
+          4. `referrerPolicy="no-referrer"` prevents the browser from
+             leaking the Vercel domain in the `Referer` header on
+             cross-origin image fetches. Defensive for signed-URL
+             scenarios where some S3 configurations validate the
+             referer.
+
+          5. `loading="lazy"` defers off-screen images until they're
+             needed. Native browser feature, no JS overhead.
+
+          For more elaborate optimization (WebP conversion, responsive
+          srcsets, lazy hydration), Next.js's image pipeline would be
+          worth the complexity. For a take-home demo with signed S3
+          URLs, plain <img> is the simpler and more reliable choice.
+      */}
       <div
         className={`relative w-full overflow-hidden bg-[var(--surface)] ${aspectClass(creative.aspectRatio)}`}
       >
-        {/*
-          crossOrigin="anonymous" is REQUIRED to fix Cross-Origin Read
-          Blocking (CORB) when loading images from S3 pre-signed URLs.
-
-          Without it, Chromium reports CORB warnings and on stricter
-          browser configurations actually blocks the image from
-          rendering — even though the response has a valid
-          `Content-Type: image/png` header. CORB sometimes blocks
-          cross-origin image loads that arrive without a CORS
-          handshake, especially when the response is large or the
-          browser flags it as suspicious.
-
-          With `crossOrigin="anonymous"`, the browser issues the
-          request in CORS mode (no credentials), and S3's CORS rule
-          (`AllowedOrigins: ["*"]`, `AllowedMethods: ["GET", "HEAD"]`)
-          returns the proper `Access-Control-Allow-Origin: *` header.
-          The image then loads cleanly with no CORB warnings.
-
-          Trade-off: an extra preflight check happens for the first
-          request to a new origin, but it's cached for the bucket's
-          `MaxAgeSeconds` (3000s = 50 min). Negligible for the demo.
-        */}
-        <Image
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
           src={imageSrc}
           alt={`${creative.productName} — ${platformLabel(creative.aspectRatio)}`}
-          fill
-          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-          className="object-cover"
-          crossOrigin="anonymous"
-          unoptimized
+          className="absolute inset-0 h-full w-full object-cover"
+          loading="lazy"
+          referrerPolicy="no-referrer"
         />
 
         {/* Aspect ratio pill — top-right corner, subtle glass look */}
