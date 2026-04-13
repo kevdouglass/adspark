@@ -23,6 +23,8 @@ import type {
   PipelineErrorCause,
 } from "./types";
 import { withRetry, isRetryableOpenAIError } from "./retry";
+import type { RequestContext } from "@/lib/api/services";
+import { LogEvents } from "@/lib/api/logEvents";
 
 /**
  * Maximum number of concurrent DALL-E 3 requests.
@@ -134,27 +136,58 @@ export function classifyOpenAIError(error: unknown): PipelineErrorCause {
  * Uses b64_json response format to avoid URL expiry risk — the image
  * bytes arrive in the API response itself, no second HTTP call needed.
  * See ADR-002 for the full trade-off analysis.
+ *
+ * The `signal` and `ctx` parameters are optional so existing test
+ * callers (which invoke this without a request context) keep working.
+ * In production both are threaded in from `generateImages` below.
  */
 export async function generateImage(
   client: OpenAI,
-  task: GenerationTask
+  task: GenerationTask,
+  signal?: AbortSignal,
+  ctx?: RequestContext
 ): Promise<GeneratedImage> {
   const start = performance.now();
 
   const response = await withRetry(
     () =>
-      client.images.generate({
-        model: "dall-e-3",
-        prompt: task.prompt,
-        size: task.dimensions.dalleSize,
-        quality: "standard",
-        response_format: "b64_json",
-        n: 1,
-      }),
+      client.images.generate(
+        {
+          model: "dall-e-3",
+          prompt: task.prompt,
+          size: task.dimensions.dalleSize,
+          quality: "standard",
+          response_format: "b64_json",
+          n: 1,
+        },
+        // Forwarding `signal` here is the load-bearing piece: it's what
+        // makes the pipeline-budget AbortController actually cancel an
+        // in-flight OpenAI HTTP call, not just skip the NEXT retry. The
+        // OpenAI SDK passes this through to undici's fetch.
+        { signal }
+      ),
     {
       maxAttempts: 3,
       baseDelayMs: DALLE_RETRY_BASE_DELAY_MS,
       shouldRetry: isRetryableOpenAIError,
+      signal,
+      onAttempt: ({ attempt, error, willRetry, nextDelayMs }) => {
+        // Only emit a retry event when a retry is ACTUALLY queued up —
+        // the final throw is captured by the per-task catch below as
+        // a `dalle.failed`, so we don't double-log it here.
+        if (willRetry && error) {
+          ctx?.log(LogEvents.DalleRetryAttempt, {
+            product: task.product.slug,
+            ratio: task.aspectRatio,
+            attempt,
+            nextDelayMs,
+            errorType:
+              error instanceof Error ? error.constructor.name : "unknown",
+            status:
+              error instanceof OpenAI.APIError ? error.status : undefined,
+          });
+        }
+      },
     }
   );
 
@@ -205,13 +238,43 @@ export async function generateImage(
 export async function generateImages(
   tasks: GenerationTask[],
   client: OpenAI,
+  ctx?: RequestContext,
+  signal?: AbortSignal,
   concurrency: number = DALLE_CONCURRENCY_LIMIT
 ): Promise<{ images: GeneratedImage[]; errors: PipelineError[] }> {
   const limit = pLimit(concurrency);
 
   const results = await Promise.allSettled(
     tasks.map((task) =>
-      limit(() => generateImage(client, task))
+      limit(async () => {
+        ctx?.log(LogEvents.DalleStart, {
+          product: task.product.slug,
+          ratio: task.aspectRatio,
+          size: task.dimensions.dalleSize,
+        });
+        const start = performance.now();
+        try {
+          const image = await generateImage(client, task, signal, ctx);
+          ctx?.log(LogEvents.DalleDone, {
+            product: task.product.slug,
+            ratio: task.aspectRatio,
+            ms: image.generationTimeMs,
+            bytes: image.imageBuffer.byteLength,
+          });
+          return image;
+        } catch (error) {
+          const ms = Math.round(performance.now() - start);
+          ctx?.log(LogEvents.DalleFailed, {
+            product: task.product.slug,
+            ratio: task.aspectRatio,
+            ms,
+            errorType:
+              error instanceof Error ? error.constructor.name : "unknown",
+            cause: classifyOpenAIError(error),
+          });
+          throw error;
+        }
+      })
     )
   );
 

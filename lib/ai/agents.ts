@@ -78,10 +78,71 @@
  *     valid brief).
  */
 
+import { createHash } from "node:crypto";
 import type OpenAI from "openai";
 import { campaignBriefSchema } from "@/lib/pipeline/briefParser";
 import type { GenerateRequestBody } from "@/lib/api/types";
 import { SAMPLE_BRIEFS } from "@/lib/briefs/sampleBriefs";
+import type { RequestContext } from "@/lib/api/services";
+import { LogEvents } from "@/lib/api/logEvents";
+
+/**
+ * Compute a short stable hash of a prompt so structured logs can
+ * correlate an agent call to the exact prompt variant that ran
+ * without writing the full prompt text (which can be multi-KB and
+ * noisy in log streams). First 12 hex chars of SHA-256 is collision-
+ * safe for this use case — the birthday bound is ~2^24 ≈ 16M prompts
+ * and we ship ~5 prompts per orchestration.
+ */
+function promptHash(prompt: string): string {
+  return createHash("sha256").update(prompt).digest("hex").slice(0, 12);
+}
+
+/**
+ * Extract token usage from an OpenAI completion response. The SDK
+ * types this as optional because streaming and some endpoints omit
+ * it, but for our non-streaming chat.completions calls it's always
+ * present. We read defensively and fall back to `undefined` so log
+ * records never include NaN or null.
+ */
+function extractUsage(
+  completion: { usage?: { prompt_tokens?: number; completion_tokens?: number } }
+): { tokensIn?: number; tokensOut?: number } {
+  return {
+    tokensIn: completion.usage?.prompt_tokens,
+    tokensOut: completion.usage?.completion_tokens,
+  };
+}
+
+/**
+ * Classify a thrown error from an agent sub-call into a short stable
+ * `reason` field for the `agent.phase.failed` structured log event.
+ *
+ * The classifier is deliberately message-substring-based because the
+ * underlying errors come from three different layers — the OpenAI
+ * SDK (APIError), our own throw sites ("empty content", "malformed
+ * output", "schema validation"), and JSON.parse (SyntaxError). Each
+ * throws a different error class, so we normalize to a small enum
+ * for log aggregation.
+ *
+ * Adding a new reason: add a branch here AND update the
+ * `agentEvents.test.ts` contract test that asserts the reason field.
+ */
+function classifyAgentError(error: unknown): string {
+  if (error instanceof SyntaxError) return "json_parse";
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    if (msg.includes("empty content")) return "empty_content";
+    if (msg.includes("malformed")) return "malformed_output";
+    if (msg.includes("schema validation")) return "schema_invalid";
+    if (msg.includes("schema-invalid")) return "schema_invalid";
+    // OpenAI SDK errors surface here — either APIError subclasses or
+    // network errors from undici. `constructor.name` gives us
+    // "APIError" / "BadRequestError" / "RateLimitError" etc.
+    return error.constructor.name || "upstream_error";
+  }
+  return "unknown";
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -221,7 +282,8 @@ Keep each priority directive short, specific, and grounded in the user's descrip
 async function runTriage(
   client: OpenAI,
   userPrompt: string,
-  existingBrief: GenerateRequestBody | null
+  existingBrief: GenerateRequestBody | null,
+  ctx?: RequestContext
 ): Promise<TriageResult> {
   const userMessage = [
     `USER CAMPAIGN DESCRIPTION:\n${userPrompt}`,
@@ -230,35 +292,61 @@ async function runTriage(
       : "",
   ].join("");
 
-  const completion = await client.chat.completions.create({
+  const hash = promptHash(TRIAGE_SYSTEM_PROMPT + userMessage);
+  const start = performance.now();
+  ctx?.log(LogEvents.AgentStart, {
+    phase: "triage",
     model: MODEL,
-    messages: [
-      { role: "system", content: TRIAGE_SYSTEM_PROMPT },
-      { role: "user", content: userMessage },
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0.5,
-    max_tokens: 600,
+    promptHash: hash,
   });
 
-  const content = completion.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("Triage agent returned empty content");
+  try {
+    const completion = await client.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: "system", content: TRIAGE_SYSTEM_PROMPT },
+        { role: "user", content: userMessage },
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.5,
+      max_tokens: 600,
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error("Triage agent returned empty content");
+    }
+    const parsed = JSON.parse(content) as unknown;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("rationale" in parsed) ||
+      typeof (parsed as { rationale: unknown }).rationale !== "string"
+    ) {
+      throw new Error("Triage agent returned malformed output");
+    }
+    const { rationale, priorities } = parsed as {
+      rationale: string;
+      priorities?: Partial<Record<ReviewerAgentId, string>>;
+    };
+    ctx?.log(LogEvents.AgentDone, {
+      phase: "triage",
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      promptHash: hash,
+      ...extractUsage(completion),
+    });
+    return { rationale, priorities: priorities ?? {} };
+  } catch (error) {
+    ctx?.log(LogEvents.AgentFailed, {
+      phase: "triage",
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      reason: classifyAgentError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-  const parsed = JSON.parse(content) as unknown;
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("rationale" in parsed) ||
-    typeof (parsed as { rationale: unknown }).rationale !== "string"
-  ) {
-    throw new Error("Triage agent returned malformed output");
-  }
-  const { rationale, priorities } = parsed as {
-    rationale: string;
-    priorities?: Partial<Record<ReviewerAgentId, string>>;
-  };
-  return { rationale, priorities: priorities ?? {} };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +397,8 @@ ${FEW_SHOT_BLOCK}
 async function runDraft(
   client: OpenAI,
   userPrompt: string,
-  existingBrief: GenerateRequestBody | null
+  existingBrief: GenerateRequestBody | null,
+  ctx?: RequestContext
 ): Promise<GenerateRequestBody> {
   const userMessage = [
     `USER CAMPAIGN DESCRIPTION:\n${userPrompt}`,
@@ -318,30 +407,60 @@ async function runDraft(
       : "",
   ].join("");
 
-  const completion = await client.chat.completions.create({
+  const hash = promptHash(DRAFT_SYSTEM_PROMPT + userMessage);
+  const start = performance.now();
+  ctx?.log(LogEvents.AgentStart, {
+    phase: "draft",
+    stakeholder: "campaign-manager",
     model: MODEL,
-    messages: [
-      { role: "system", content: DRAFT_SYSTEM_PROMPT },
-      { role: "user", content: userMessage },
-    ],
-    response_format: { type: "json_object" },
-    temperature: DRAFT_TEMPERATURE,
-    max_tokens: 2000,
+    promptHash: hash,
   });
 
-  const content = completion.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("Draft agent returned empty content");
+  try {
+    const completion = await client.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: "system", content: DRAFT_SYSTEM_PROMPT },
+        { role: "user", content: userMessage },
+      ],
+      response_format: { type: "json_object" },
+      temperature: DRAFT_TEMPERATURE,
+      max_tokens: 2000,
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error("Draft agent returned empty content");
+    }
+    const raw = JSON.parse(content) as unknown;
+    const parsed = campaignBriefSchema.safeParse(raw);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new Error(`Draft agent output failed schema validation: ${issues}`);
+    }
+    ctx?.log(LogEvents.AgentDone, {
+      phase: "draft",
+      stakeholder: "campaign-manager",
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      promptHash: hash,
+      products: parsed.data.products.length,
+      ...extractUsage(completion),
+    });
+    return parsed.data;
+  } catch (error) {
+    ctx?.log(LogEvents.AgentFailed, {
+      phase: "draft",
+      stakeholder: "campaign-manager",
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      reason: classifyAgentError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-  const raw = JSON.parse(content) as unknown;
-  const parsed = campaignBriefSchema.safeParse(raw);
-  if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    throw new Error(`Draft agent output failed schema validation: ${issues}`);
-  }
-  return parsed.data;
 }
 
 // ---------------------------------------------------------------------------
@@ -503,82 +622,120 @@ async function runReviewer(
   client: OpenAI,
   reviewer: ReviewerDefinition,
   draftBrief: GenerateRequestBody,
-  triagePriority: string | undefined
+  triagePriority: string | undefined,
+  ctx?: RequestContext
 ): Promise<ReviewerOutput> {
   const userMessage = [
     triagePriority ? `TRIAGE PRIORITY FOR YOU: ${triagePriority}\n` : "",
     `DRAFT BRIEF TO REVIEW:\n${JSON.stringify(draftBrief, null, 2)}`,
   ].join("");
 
-  const completion = await client.chat.completions.create({
+  const hash = promptHash(reviewer.systemPrompt + userMessage);
+  const start = performance.now();
+  ctx?.log(LogEvents.AgentStart, {
+    phase: "review",
+    stakeholder: reviewer.id,
     model: MODEL,
-    messages: [
-      { role: "system", content: reviewer.systemPrompt },
-      { role: "user", content: userMessage },
-    ],
-    response_format: { type: "json_object" },
-    temperature: REVIEW_TEMPERATURE,
-    max_tokens: 2500,
+    promptHash: hash,
   });
 
-  const content = completion.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error(`${reviewer.label} returned empty content`);
-  }
-  const raw = JSON.parse(content) as unknown;
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    !("brief" in raw) ||
-    !("review" in raw)
-  ) {
-    throw new Error(`${reviewer.label} returned malformed output`);
-  }
+  try {
+    const completion = await client.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: "system", content: reviewer.systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      response_format: { type: "json_object" },
+      temperature: REVIEW_TEMPERATURE,
+      max_tokens: 2500,
+    });
 
-  const typed = raw as {
-    brief: unknown;
-    review: {
-      summary?: unknown;
-      severity?: unknown;
-      suggestions?: unknown;
+    const content = completion.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error(`${reviewer.label} returned empty content`);
+    }
+    const raw = JSON.parse(content) as unknown;
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      !("brief" in raw) ||
+      !("review" in raw)
+    ) {
+      throw new Error(`${reviewer.label} returned malformed output`);
+    }
+
+    const typed = raw as {
+      brief: unknown;
+      review: {
+        summary?: unknown;
+        severity?: unknown;
+        suggestions?: unknown;
+      };
     };
-  };
 
-  const briefValidation = campaignBriefSchema.safeParse(typed.brief);
-  if (!briefValidation.success) {
-    const issues = briefValidation.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    throw new Error(
-      `${reviewer.label} produced schema-invalid brief: ${issues}`
-    );
-  }
+    const briefValidation = campaignBriefSchema.safeParse(typed.brief);
+    if (!briefValidation.success) {
+      const issues = briefValidation.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new Error(
+        `${reviewer.label} produced schema-invalid brief: ${issues}`
+      );
+    }
 
-  const summary =
-    typeof typed.review?.summary === "string"
-      ? typed.review.summary
-      : "(no summary)";
-  const rawSeverity = typed.review?.severity;
-  const severity: AgentReviewNote["severity"] =
-    rawSeverity === "critical" || rawSeverity === "caution"
-      ? rawSeverity
-      : "info";
-  const suggestions = Array.isArray(typed.review?.suggestions)
-    ? typed.review.suggestions.filter((s): s is string => typeof s === "string")
-    : undefined;
+    ctx?.log(LogEvents.AgentDone, {
+      phase: "review",
+      stakeholder: reviewer.id,
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      promptHash: hash,
+      severity:
+        typed.review?.severity === "critical" ||
+        typed.review?.severity === "caution"
+          ? typed.review.severity
+          : "info",
+      ...extractUsage(completion),
+    });
 
-  return {
-    agentId: reviewer.id,
-    agentLabel: reviewer.label,
-    brief: briefValidation.data,
-    note: {
+    const summary =
+      typeof typed.review?.summary === "string"
+        ? typed.review.summary
+        : "(no summary)";
+    const rawSeverity = typed.review?.severity;
+    const severity: AgentReviewNote["severity"] =
+      rawSeverity === "critical" || rawSeverity === "caution"
+        ? rawSeverity
+        : "info";
+    const suggestions = Array.isArray(typed.review?.suggestions)
+      ? typed.review.suggestions.filter(
+          (s): s is string => typeof s === "string"
+        )
+      : undefined;
+
+    return {
       agentId: reviewer.id,
       agentLabel: reviewer.label,
-      summary,
-      severity,
-      suggestions,
-    },
-  };
+      brief: briefValidation.data,
+      note: {
+        agentId: reviewer.id,
+        agentLabel: reviewer.label,
+        summary,
+        severity,
+        suggestions,
+      },
+    };
+  } catch (error) {
+    ctx?.log(LogEvents.AgentFailed, {
+      phase: "review",
+      stakeholder: reviewer.id,
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      reason: classifyAgentError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -613,7 +770,8 @@ Synthesis rules:
 async function runSynthesis(
   client: OpenAI,
   draft: GenerateRequestBody,
-  reviewerOutputs: ReviewerOutput[]
+  reviewerOutputs: ReviewerOutput[],
+  ctx?: RequestContext
 ): Promise<{ brief: GenerateRequestBody; rationale: string }> {
   const reviewerBlock = reviewerOutputs
     .map(
@@ -624,43 +782,71 @@ async function runSynthesis(
 
   const userMessage = `ORIGINAL DRAFT:\n${JSON.stringify(draft, null, 2)}\n\n---\n\nREVIEWER OUTPUTS:\n\n${reviewerBlock}`;
 
-  const completion = await client.chat.completions.create({
+  const hash = promptHash(SYNTHESIS_SYSTEM_PROMPT + userMessage);
+  const start = performance.now();
+  ctx?.log(LogEvents.AgentStart, {
+    phase: "synthesis",
     model: MODEL,
-    messages: [
-      { role: "system", content: SYNTHESIS_SYSTEM_PROMPT },
-      { role: "user", content: userMessage },
-    ],
-    response_format: { type: "json_object" },
-    temperature: SYNTHESIS_TEMPERATURE,
-    max_tokens: 2500,
+    promptHash: hash,
+    reviewersIn: reviewerOutputs.length,
   });
 
-  const content = completion.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("Synthesis agent returned empty content");
+  try {
+    const completion = await client.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: "system", content: SYNTHESIS_SYSTEM_PROMPT },
+        { role: "user", content: userMessage },
+      ],
+      response_format: { type: "json_object" },
+      temperature: SYNTHESIS_TEMPERATURE,
+      max_tokens: 2500,
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error("Synthesis agent returned empty content");
+    }
+    const raw = JSON.parse(content) as unknown;
+    if (
+      typeof raw !== "object" ||
+      raw === null ||
+      !("brief" in raw) ||
+      !("rationale" in raw)
+    ) {
+      throw new Error("Synthesis agent returned malformed output");
+    }
+    const typed = raw as { brief: unknown; rationale: unknown };
+    const briefValidation = campaignBriefSchema.safeParse(typed.brief);
+    if (!briefValidation.success) {
+      const issues = briefValidation.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new Error(`Synthesis output failed schema validation: ${issues}`);
+    }
+
+    ctx?.log(LogEvents.AgentDone, {
+      phase: "synthesis",
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      promptHash: hash,
+      ...extractUsage(completion),
+    });
+    const rationale =
+      typeof typed.rationale === "string"
+        ? typed.rationale
+        : "(no rationale)";
+    return { brief: briefValidation.data, rationale };
+  } catch (error) {
+    ctx?.log(LogEvents.AgentFailed, {
+      phase: "synthesis",
+      model: MODEL,
+      ms: Math.round(performance.now() - start),
+      reason: classifyAgentError(error),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-  const raw = JSON.parse(content) as unknown;
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    !("brief" in raw) ||
-    !("rationale" in raw)
-  ) {
-    throw new Error("Synthesis agent returned malformed output");
-  }
-  const typed = raw as { brief: unknown; rationale: unknown };
-  const briefValidation = campaignBriefSchema.safeParse(typed.brief);
-  if (!briefValidation.success) {
-    const issues = briefValidation.error.issues
-      .map((i) => `${i.path.join(".")}: ${i.message}`)
-      .join("; ");
-    throw new Error(`Synthesis output failed schema validation: ${issues}`);
-  }
-  const rationale =
-    typeof typed.rationale === "string"
-      ? typed.rationale
-      : "(no rationale)";
-  return { brief: briefValidation.data, rationale };
 }
 
 // ---------------------------------------------------------------------------
@@ -682,7 +868,8 @@ async function runSynthesis(
 export async function orchestrateBrief(
   client: OpenAI,
   userPrompt: string,
-  existingBrief: GenerateRequestBody | null
+  existingBrief: GenerateRequestBody | null,
+  ctx?: RequestContext
 ): Promise<OrchestrationResult> {
   const totalStart = performance.now();
   const notes: AgentReviewNote[] = [];
@@ -708,7 +895,7 @@ export async function orchestrateBrief(
   const draftStart = triageStart;
 
   const [triage, draftBrief] = await Promise.all([
-    runTriage(client, userPrompt, existingBrief).catch((error): TriageResult => {
+    runTriage(client, userPrompt, existingBrief, ctx).catch((error): TriageResult => {
       console.warn(
         "[agents] triage failed, continuing without priorities:",
         error
@@ -719,7 +906,7 @@ export async function orchestrateBrief(
         priorities: {},
       };
     }),
-    runDraft(client, userPrompt, existingBrief),
+    runDraft(client, userPrompt, existingBrief, ctx),
   ]);
 
   // Both timings are measured from the same start instant. Because they
@@ -751,7 +938,13 @@ export async function orchestrateBrief(
   const reviewStart = performance.now();
   const reviewSettled = await Promise.allSettled(
     REVIEWERS.map((reviewer) =>
-      runReviewer(client, reviewer, draftBrief, triage.priorities[reviewer.id])
+      runReviewer(
+        client,
+        reviewer,
+        draftBrief,
+        triage.priorities[reviewer.id],
+        ctx
+      )
     )
   );
   const reviewMs = Math.round(performance.now() - reviewStart);
@@ -783,7 +976,7 @@ export async function orchestrateBrief(
     "No reviewer feedback was available for this run — the draft is returned as-is.";
   if (successfulReviews.length > 0) {
     try {
-      const synth = await runSynthesis(client, draftBrief, successfulReviews);
+      const synth = await runSynthesis(client, draftBrief, successfulReviews, ctx);
       finalBrief = synth.brief;
       synthesisRationale = synth.rationale;
     } catch (error) {

@@ -99,14 +99,21 @@ describe("generateImage (single)", () => {
     const client = createMockClient();
     await generateImage(client, TASK);
 
-    expect(client.images.generate).toHaveBeenCalledWith({
-      model: "dall-e-3",
-      prompt: TASK.prompt,
-      size: "1024x1024",
-      quality: "standard",
-      response_format: "b64_json",
-      n: 1,
-    });
+    expect(client.images.generate).toHaveBeenCalledWith(
+      {
+        model: "dall-e-3",
+        prompt: TASK.prompt,
+        size: "1024x1024",
+        quality: "standard",
+        response_format: "b64_json",
+        n: 1,
+      },
+      // Second arg is the per-request options bag carrying the abort
+      // signal from the pipeline-budget AbortController. When no signal
+      // is passed in (this test invokes generateImage directly without
+      // threading one), the value is `undefined`.
+      { signal: undefined }
+    );
   });
 
   it("throws on missing b64_json in response", async () => {
@@ -240,7 +247,10 @@ describe("generateImages (batch)", () => {
       },
     } as unknown as OpenAI;
 
-    await generateImages(tasks, client, 3); // limit to 3
+    // Positional args after (tasks, client) are: ctx, signal, concurrency.
+    // This test pre-dates the ctx + signal params added for container
+    // AbortController support, so they're both passed as undefined.
+    await generateImages(tasks, client, undefined, undefined, 3);
 
     expect(maxConcurrent).toBeLessThanOrEqual(3);
   });

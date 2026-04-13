@@ -1,0 +1,12 @@
+# This file intentionally left blank.
+#
+# Next.js serves files from `public/` at the root of the web server,
+# and the Dockerfile's standalone COPY step expects this directory to
+# exist. The project currently has no static assets to serve from here
+# (icons/fonts/etc are either baked into the bundle or loaded from
+# external URLs), so this .gitkeep exists purely to ensure the
+# directory is committed and the Docker build can `COPY /app/public`
+# without failing.
+#
+# When you add a static asset (favicon, logo, og:image), drop it in
+# this directory and reference it from your components as `/filename`.

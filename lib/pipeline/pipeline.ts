@@ -38,6 +38,7 @@ import type {
   StorageProvider,
 } from "./types";
 import type { RequestContext } from "@/lib/api/services";
+import { LogEvents } from "@/lib/api/logEvents";
 import { parseBrief } from "./briefParser";
 import { resolveAssets } from "./assetResolver";
 import { buildGenerationTasks } from "./promptBuilder";
@@ -65,6 +66,19 @@ export type StageChangeCallback = (
 
 export interface RunPipelineOptions {
   onStageChange?: StageChangeCallback;
+  /**
+   * Optional abort signal. When it fires, the in-flight DALL-E batch
+   * is cancelled (via the signal being passed through to the OpenAI
+   * SDK and the retry backoff sleeper), compositing is skipped for
+   * remaining tasks, and the pipeline returns a partial result with
+   * an `upstream_timeout` error in the errors array.
+   *
+   * In the container deployment, this signal is fired by a
+   * `setTimeout(PIPELINE_BUDGET_MS)` in the route handler — the
+   * container has no Vercel 300s function kill to back up the budget,
+   * so the pipeline is the outermost preemption boundary.
+   */
+  signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,13 +150,20 @@ export async function runPipeline(
   ctx: RequestContext,
   options: RunPipelineOptions = {}
 ): Promise<PipelineResult> {
-  const { onStageChange } = options;
+  const { onStageChange, signal } = options;
   const allErrors: PipelineError[] = [];
+
+  ctx.log(LogEvents.PipelineStart, {
+    campaignId: brief.campaign.id,
+    products: brief.products.length,
+    ratios: brief.aspectRatios.length,
+    totalImages: brief.products.length * brief.aspectRatios.length,
+  });
 
   // ------------------------------------------------------------------------
   // Stage 1: Validating
   // ------------------------------------------------------------------------
-  await emitStage("validating", onStageChange);
+  await emitStage("validating", onStageChange, ctx);
   // API route has already validated, but defensive re-check catches
   // any direct callers (tests, scripts) that bypass the boundary.
   const parseResult = parseBrief(brief);
@@ -169,8 +190,14 @@ export async function runPipeline(
   // ------------------------------------------------------------------------
   // Stage 2: Resolving assets
   // ------------------------------------------------------------------------
-  await emitStage("resolving", onStageChange);
+  await emitStage("resolving", onStageChange, ctx);
   const assetResolutions = await resolveAssets(validatedBrief.products, storage);
+  const reusedCount = assetResolutions.filter((r) => r.hasExistingAsset).length;
+  ctx.log(LogEvents.AssetsResolved, {
+    total: assetResolutions.length,
+    reused: reusedCount,
+    toGenerate: assetResolutions.length - reusedCount,
+  });
 
   // Products with existing assets skip DALL-E generation.
   // Build a map: product.slug → existing Buffer (for reused assets)
@@ -218,9 +245,18 @@ export async function runPipeline(
   // ------------------------------------------------------------------------
   // Stage 4: Generating images via DALL-E 3
   // ------------------------------------------------------------------------
-  await emitStage("generating", onStageChange);
-  const generationResult = await generateImages(tasksNeedingGeneration, client);
+  await emitStage("generating", onStageChange, ctx);
+  const generationResult = await generateImages(
+    tasksNeedingGeneration,
+    client,
+    ctx,
+    signal
+  );
   allErrors.push(...generationResult.errors);
+  ctx.log(LogEvents.GenerationDone, {
+    succeeded: generationResult.images.length,
+    failed: generationResult.errors.length,
+  });
 
   // Build GeneratedImage[] for reused assets (0ms generation time).
   // Typed guard: if the buffer is missing, this is a programmer error
@@ -279,12 +315,17 @@ export async function runPipeline(
   // ------------------------------------------------------------------------
   // Stage 5: Compositing text overlays
   // ------------------------------------------------------------------------
-  await emitStage("compositing", onStageChange);
+  await emitStage("compositing", onStageChange, ctx);
   const composited = await compositeCreatives(
     allGeneratedImages,
-    validatedBrief.campaign.message
+    validatedBrief.campaign.message,
+    ctx
   );
   allErrors.push(...composited.errors);
+  ctx.log(LogEvents.CompositeDone, {
+    succeeded: composited.creatives.length,
+    failed: composited.errors.length,
+  });
 
   // ------------------------------------------------------------------------
   // Stage 6: Organizing output (ALWAYS runs, even with 0 creatives)
@@ -315,7 +356,8 @@ export async function runPipeline(
  */
 async function compositeCreatives(
   images: GeneratedImage[],
-  campaignMessage: string
+  campaignMessage: string,
+  ctx: RequestContext
 ): Promise<{ creatives: Creative[]; errors: PipelineError[] }> {
   const results = await Promise.allSettled(
     images.map(async (image): Promise<Creative> => {
@@ -328,6 +370,11 @@ async function compositeCreatives(
       const compositingTimeMs = Math.round(
         performance.now() - compositingStart
       );
+      ctx.log(LogEvents.CompositeImage, {
+        product: image.task.product.slug,
+        ratio: image.task.aspectRatio,
+        ms: compositingTimeMs,
+      });
 
       return {
         product: image.task.product,
@@ -406,7 +453,7 @@ async function organizeAndReturn(
   ctx: RequestContext,
   onStageChange?: StageChangeCallback
 ): Promise<PipelineResult> {
-  await emitStage("organizing", onStageChange);
+  await emitStage("organizing", onStageChange, ctx);
   const organized = await organizeOutput(
     brief.campaign.id,
     brief,
@@ -417,15 +464,24 @@ async function organizeAndReturn(
   allErrors.push(...organized.errors);
   allErrors.push(...organized.systemErrors.map(toPipelineError));
 
-  await emitStage("complete", onStageChange);
+  await emitStage("complete", onStageChange, ctx);
 
-  return {
+  const result: PipelineResult = {
     campaignId: brief.campaign.id,
     creatives: organized.creatives,
     totalTimeMs: elapsedMs(ctx),
     totalImages: organized.creatives.length,
     errors: allErrors,
   };
+
+  ctx.log(LogEvents.PipelineComplete, {
+    campaignId: result.campaignId,
+    totalMs: result.totalTimeMs,
+    creatives: result.totalImages,
+    errors: result.errors.length,
+  });
+
+  return result;
 }
 
 /**
@@ -459,8 +515,10 @@ function toPipelineError(systemError: {
  */
 async function emitStage(
   stage: PipelineStage,
-  callback?: StageChangeCallback
+  callback: StageChangeCallback | undefined,
+  ctx: RequestContext
 ): Promise<void> {
+  ctx.log(LogEvents.Stage, { stage });
   if (callback) {
     await callback(stage);
   }

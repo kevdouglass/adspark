@@ -175,6 +175,7 @@ function createTestRequestContext(): RequestContext {
   return {
     requestId: "test-request-uuid",
     startedAtPerfMs: performance.now(),
+    log: () => {},
   };
 }
 

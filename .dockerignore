@@ -1,0 +1,48 @@
+# AdSpark .dockerignore
+#
+# Goal: keep the build context small and keep secrets + dev-only state
+# out of the image. A small context means faster uploads to the Docker
+# daemon, smaller BuildKit caches, and a dramatically reduced attack
+# surface if an image is ever pushed to a registry.
+
+# Version control
+.git
+.gitignore
+.github
+
+# Node + build artifacts
+node_modules
+.next
+out
+output
+
+# Secrets — .env.docker.example is allowed back via the `!` below
+.env
+.env.*
+!.env.docker.example
+
+# Local dev tooling
+.vscode
+.idea
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# Test infrastructure (not needed at runtime)
+__tests__
+coverage
+*.test.ts
+*.test.tsx
+vitest.config.ts
+
+# Documentation + knowledge base (not needed at runtime)
+docs
+knowledge-base
+examples
+.review-prompts
+.review-reports
+.claude
+
+# OS junk
+.DS_Store
+Thumbs.db
