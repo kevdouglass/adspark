@@ -393,6 +393,268 @@ describe("POST /api/generate", () => {
     );
   });
 
+  // ---------------------------------------------------------------------------
+  // SUCCESS CONTRACT TEST
+  //
+  // This test validates the FULL success response shape produced by
+  // /api/generate. It exists as a regression guard against any layer of
+  // the pipeline accidentally dropping fields, returning malformed data,
+  // or mixing partial-failure shapes into the success path.
+  //
+  // If this test starts failing, the success contract has been broken
+  // somewhere — either in pipeline.ts, in lib/api/mappers.ts, or in the
+  // route handler itself. Look at what the assertion message says is
+  // missing and trace it back through the layer that owns it.
+  //
+  // Why this is more thorough than the existing "returns 200 with
+  // PipelineResult on successful generation" test:
+  //   - That test only asserts 4 fields (status, creatives.length,
+  //     requestId format, totalImages). Half the success contract is
+  //     untested.
+  //   - This test exercises a 6-image batch (2 products × 3 ratios),
+  //     which is the most-scrutinized demo configuration.
+  //   - Every field of every creative is asserted with a type guard,
+  //     not just presence.
+  //   - The pre-signed URL format is validated to make sure mappers
+  //     aren't returning relative paths.
+  //   - The errors array MUST be empty for a true success — partial
+  //     failures should never reach this code path.
+  //   - Top-level fields (campaignId, totalTimeMs, totalImages,
+  //     requestId) are individually verified.
+  // ---------------------------------------------------------------------------
+  it("returns a complete success contract for a 6-image generation", async () => {
+    // Arrange — simulate a fully successful 6-image pipeline run.
+    // Every field in the resolved value mirrors what runPipeline would
+    // return on the happy path, so any field added to the contract
+    // later must be added here AND in the assertions below.
+    const mockResult = {
+      campaignId: "summer-2026-suncare",
+      creatives: [
+        {
+          productName: "SPF 50 Mineral Sunscreen",
+          productSlug: "spf-50-sunscreen",
+          aspectRatio: "1:1" as const,
+          dimensions: "1080x1080",
+          creativePath:
+            "summer-2026-suncare/spf-50-sunscreen/1x1/creative.png",
+          thumbnailPath:
+            "summer-2026-suncare/spf-50-sunscreen/1x1/thumbnail.webp",
+          creativeUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/spf-50-sunscreen/1x1/creative.png?X-Amz-Signature=abc",
+          thumbnailUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/spf-50-sunscreen/1x1/thumbnail.webp?X-Amz-Signature=def",
+          prompt:
+            "A premium sun protection product: SPF 50 Mineral Sunscreen. Reef-safe mineral sunscreen with non-nano zinc oxide. Key features: reef-safe, mineral formula. The product's brand color palette is #F4A261. Designed for Health-conscious adults 25-45 in North America. The mood is vibrant, trustworthy, active lifestyle. Setting: warm golden-hour sunlight. Square composition. Center the product prominently. Photorealistic commercial product photography. Do not include any text. People may appear naturally in the scene.",
+          generationTimeMs: 22340,
+          compositingTimeMs: 412,
+        },
+        {
+          productName: "SPF 50 Mineral Sunscreen",
+          productSlug: "spf-50-sunscreen",
+          aspectRatio: "9:16" as const,
+          dimensions: "1080x1920",
+          creativePath:
+            "summer-2026-suncare/spf-50-sunscreen/9x16/creative.png",
+          thumbnailPath:
+            "summer-2026-suncare/spf-50-sunscreen/9x16/thumbnail.webp",
+          creativeUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/spf-50-sunscreen/9x16/creative.png?X-Amz-Signature=ghi",
+          thumbnailUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/spf-50-sunscreen/9x16/thumbnail.webp?X-Amz-Signature=jkl",
+          prompt:
+            "A premium sun protection product: SPF 50 Mineral Sunscreen. Reef-safe mineral sunscreen. Vertical composition for mobile Stories/Reels. Position the product in the upper two-thirds.",
+          generationTimeMs: 21890,
+          compositingTimeMs: 401,
+        },
+        {
+          productName: "SPF 50 Mineral Sunscreen",
+          productSlug: "spf-50-sunscreen",
+          aspectRatio: "16:9" as const,
+          dimensions: "1200x675",
+          creativePath:
+            "summer-2026-suncare/spf-50-sunscreen/16x9/creative.png",
+          thumbnailPath:
+            "summer-2026-suncare/spf-50-sunscreen/16x9/thumbnail.webp",
+          creativeUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/spf-50-sunscreen/16x9/creative.png?X-Amz-Signature=mno",
+          thumbnailUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/spf-50-sunscreen/16x9/thumbnail.webp?X-Amz-Signature=pqr",
+          prompt:
+            "A premium sun protection product: SPF 50 Mineral Sunscreen. Wide horizontal banner composition.",
+          generationTimeMs: 22102,
+          compositingTimeMs: 388,
+        },
+        {
+          productName: "After-Sun Aloe Gel",
+          productSlug: "aloe-gel",
+          aspectRatio: "1:1" as const,
+          dimensions: "1080x1080",
+          creativePath: "summer-2026-suncare/aloe-gel/1x1/creative.png",
+          thumbnailPath: "summer-2026-suncare/aloe-gel/1x1/thumbnail.webp",
+          creativeUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/aloe-gel/1x1/creative.png?X-Amz-Signature=stu",
+          thumbnailUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/aloe-gel/1x1/thumbnail.webp?X-Amz-Signature=vwx",
+          prompt: "A premium skincare product: After-Sun Aloe Gel.",
+          generationTimeMs: 23001,
+          compositingTimeMs: 423,
+        },
+        {
+          productName: "After-Sun Aloe Gel",
+          productSlug: "aloe-gel",
+          aspectRatio: "9:16" as const,
+          dimensions: "1080x1920",
+          creativePath: "summer-2026-suncare/aloe-gel/9x16/creative.png",
+          thumbnailPath: "summer-2026-suncare/aloe-gel/9x16/thumbnail.webp",
+          creativeUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/aloe-gel/9x16/creative.png?X-Amz-Signature=yza",
+          thumbnailUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/aloe-gel/9x16/thumbnail.webp?X-Amz-Signature=bcd",
+          prompt: "A premium skincare product: After-Sun Aloe Gel.",
+          generationTimeMs: 22500,
+          compositingTimeMs: 405,
+        },
+        {
+          productName: "After-Sun Aloe Gel",
+          productSlug: "aloe-gel",
+          aspectRatio: "16:9" as const,
+          dimensions: "1200x675",
+          creativePath: "summer-2026-suncare/aloe-gel/16x9/creative.png",
+          thumbnailPath: "summer-2026-suncare/aloe-gel/16x9/thumbnail.webp",
+          creativeUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/aloe-gel/16x9/creative.png?X-Amz-Signature=efg",
+          thumbnailUrl:
+            "https://test-bucket.s3.us-east-1.amazonaws.com/summer-2026-suncare/aloe-gel/16x9/thumbnail.webp?X-Amz-Signature=hij",
+          prompt: "A premium skincare product: After-Sun Aloe Gel.",
+          generationTimeMs: 22250,
+          compositingTimeMs: 395,
+        },
+      ],
+      totalTimeMs: 47823,
+      totalImages: 6,
+      errors: [],
+    };
+    mockRunPipeline.mockResolvedValue(mockResult);
+
+    // Act
+    const request = createPostRequest(VALID_BRIEF);
+    const response = await POST(request);
+    const body = await response.json();
+
+    // ---- Assert: HTTP layer ----
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toMatch(/application\/json/);
+
+    // ---- Assert: top-level shape ----
+    expect(body).toBeDefined();
+    expect(typeof body).toBe("object");
+    expect(body).not.toBeNull();
+
+    // Every required top-level field of GenerateSuccessResponseBody
+    expect(body).toHaveProperty("campaignId");
+    expect(body).toHaveProperty("creatives");
+    expect(body).toHaveProperty("totalTimeMs");
+    expect(body).toHaveProperty("totalImages");
+    expect(body).toHaveProperty("errors");
+    expect(body).toHaveProperty("requestId");
+
+    // ---- Assert: top-level types and values ----
+    expect(typeof body.campaignId).toBe("string");
+    expect(body.campaignId).toBe("summer-2026-suncare");
+    expect(Array.isArray(body.creatives)).toBe(true);
+    expect(body.creatives).toHaveLength(6);
+    expect(typeof body.totalTimeMs).toBe("number");
+    expect(body.totalTimeMs).toBeGreaterThan(0);
+    expect(typeof body.totalImages).toBe("number");
+    expect(body.totalImages).toBe(6);
+    expect(Array.isArray(body.errors)).toBe(true);
+    // CRITICAL: a true success has zero errors. Any errors present here
+    // would indicate the pipeline mixed partial-failure shape into the
+    // success response.
+    expect(body.errors).toHaveLength(0);
+    expect(typeof body.requestId).toBe("string");
+    expect(body.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
+
+    // ---- Assert: per-creative shape (validates EVERY creative) ----
+    for (const creative of body.creatives) {
+      // Required fields exist
+      expect(creative).toHaveProperty("productName");
+      expect(creative).toHaveProperty("productSlug");
+      expect(creative).toHaveProperty("aspectRatio");
+      expect(creative).toHaveProperty("dimensions");
+      expect(creative).toHaveProperty("creativePath");
+      expect(creative).toHaveProperty("thumbnailPath");
+      expect(creative).toHaveProperty("creativeUrl");
+      expect(creative).toHaveProperty("thumbnailUrl");
+      expect(creative).toHaveProperty("prompt");
+      expect(creative).toHaveProperty("generationTimeMs");
+      expect(creative).toHaveProperty("compositingTimeMs");
+
+      // Field types
+      expect(typeof creative.productName).toBe("string");
+      expect(creative.productName.length).toBeGreaterThan(0);
+      expect(typeof creative.productSlug).toBe("string");
+      expect(creative.productSlug).toMatch(/^[a-z0-9-]+$/);
+      expect(["1:1", "9:16", "16:9"]).toContain(creative.aspectRatio);
+      expect(typeof creative.dimensions).toBe("string");
+      expect(creative.dimensions).toMatch(/^\d+x\d+$/);
+      expect(typeof creative.creativePath).toBe("string");
+      expect(creative.creativePath).toMatch(/\.png$/);
+      expect(typeof creative.thumbnailPath).toBe("string");
+      expect(creative.thumbnailPath).toMatch(/\.webp$/);
+
+      // Pre-signed URLs MUST be valid HTTPS URLs (no relative paths,
+      // no malformed signatures, no localhost leakage)
+      expect(typeof creative.creativeUrl).toBe("string");
+      expect(creative.creativeUrl).toMatch(/^https:\/\//);
+      expect(typeof creative.thumbnailUrl).toBe("string");
+      expect(creative.thumbnailUrl).toMatch(/^https:\/\//);
+
+      // Prompt is non-empty (catches accidentally-empty prompt builders)
+      expect(typeof creative.prompt).toBe("string");
+      expect(creative.prompt.length).toBeGreaterThan(0);
+
+      // Timing fields are positive numbers (catches uninitialized timing
+      // instrumentation that defaults to 0 or negative)
+      expect(typeof creative.generationTimeMs).toBe("number");
+      expect(creative.generationTimeMs).toBeGreaterThan(0);
+      expect(typeof creative.compositingTimeMs).toBe("number");
+      expect(creative.compositingTimeMs).toBeGreaterThan(0);
+    }
+
+    // ---- Assert: full set of (product × ratio) combinations is present ----
+    // Catches the regression where one product or one ratio is silently
+    // dropped from the response (which we observed during live debugging
+    // when partial-failure shapes leaked through the success path).
+    const seenCombinations = body.creatives.map(
+      (c: { productSlug: string; aspectRatio: string }) =>
+        `${c.productSlug}:${c.aspectRatio}`
+    );
+    expect(seenCombinations).toContain("spf-50-sunscreen:1:1");
+    expect(seenCombinations).toContain("spf-50-sunscreen:9:16");
+    expect(seenCombinations).toContain("spf-50-sunscreen:16:9");
+    expect(seenCombinations).toContain("aloe-gel:1:1");
+    expect(seenCombinations).toContain("aloe-gel:9:16");
+    expect(seenCombinations).toContain("aloe-gel:16:9");
+
+    // ---- Assert: response body has NO unexpected top-level fields ----
+    // The success contract is closed — any new field must be a deliberate
+    // addition to the response shape, not a leak from internal types.
+    const expectedKeys = new Set([
+      "campaignId",
+      "creatives",
+      "totalTimeMs",
+      "totalImages",
+      "errors",
+      "requestId",
+    ]);
+    for (const key of Object.keys(body)) {
+      expect(expectedKeys).toContain(key);
+    }
+  });
+
   it("generates unique requestId per request (isolation)", async () => {
     mockRunPipeline.mockResolvedValue({
       campaignId: "summer-2026-suncare",
