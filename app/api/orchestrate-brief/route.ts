@@ -54,6 +54,24 @@ const MAX_PROMPT_CHARS = 1000;
 /** Sentinel thrown by the timeout race so the catch block can disambiguate. */
 const ORCHESTRATION_TIMEOUT_SENTINEL = "orchestration_timeout";
 
+/**
+ * Maximum execution duration for this route handler.
+ *
+ * 300 seconds matches Vercel Pro's hard ceiling. Without this export,
+ * the route would fall back to the 60s default even on Pro plans.
+ *
+ * The orchestrator typically runs in ~10-12s (parallel triage+draft
+ * + parallel reviewers + synthesis) so 300s is overkill for normal
+ * runs — but it gives plenty of headroom for slow OpenAI responses
+ * or retried calls. The actual server-side enforcement happens via
+ * `ORCHESTRATE_BUDGET_MS` in `lib/api/timeouts.ts`.
+ *
+ * Hobby tier note: silently capped at 60s. Harmless declaration.
+ *
+ * Reference: https://vercel.com/docs/functions/runtimes#max-duration
+ */
+export const maxDuration = 300;
+
 async function readBodyWithLimit(
   request: Request,
   maxBytes: number

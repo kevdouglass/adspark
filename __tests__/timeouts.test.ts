@@ -36,48 +36,52 @@ describe("staggered timeout invariants", () => {
     );
   });
 
-  it("the inner stagger is at least 5 seconds and the outer at least 2", () => {
-    // Inner stagger (PIPELINE_BUDGET → CLIENT_REQUEST_TIMEOUT): 8 seconds.
-    //   The server's graceful timeout fires at 50s; the client's abort
-    //   fires at 58s. The 8-second window guarantees the server can
+  it("the inner stagger is at least 10 seconds and the outer at least 60", () => {
+    // Inner stagger (PIPELINE_BUDGET → CLIENT_REQUEST_TIMEOUT): 15 seconds.
+    //   With Vercel Pro's 300s ceiling we have plenty of headroom and
+    //   restored a generous inner stagger. The server has 15 seconds to
     //   compose, serialize, and send a typed 504 error before the client
-    //   gives up.
+    //   gives up — comfortable margin even on slow Vercel cold starts.
     //
-    // Outer stagger (CLIENT_REQUEST_TIMEOUT → VERCEL HARD KILL): 2 seconds.
-    //   Tightened from the original 5s to give 6-image briefs a fighting
-    //   chance to complete on Tier 1 DALL-E + Vercel Hobby. The client
-    //   waits until 58s (vs 55s previously); Vercel still hard-kills at
-    //   60s. The 2-second margin is intentionally narrow but defensible:
-    //   the client only needs enough time to receive the response headers,
-    //   and the server has already serialized the JSON body by the time
-    //   it sends. Network latency from a Vercel function back to the
-    //   client is typically <500ms.
+    // Outer stagger (CLIENT_REQUEST_TIMEOUT → VERCEL HARD KILL): 165 seconds.
+    //   Massively widened from the previous 2-second margin (which was
+    //   constrained by the Hobby 60s cap). With Pro's 300s cap and a
+    //   135s client timeout, we have 165 seconds of slack — far more
+    //   than we need. We could theoretically push CLIENT_REQUEST_TIMEOUT
+    //   higher, but that erodes the user-perceived patience budget. 135s
+    //   is enough to comfortably handle 12-image briefs at Tier 1.
     //
-    // If you tighten these further you WILL re-introduce the race
-    // condition. Bumping CLIENT_REQUEST_TIMEOUT to 59000 would leave only
-    // 1s of margin to Vercel's kill, which is too narrow for production.
-    // The proper way to push past 58s is to upgrade Vercel Pro (300s
-    // function duration) or to implement streaming responses (which
-    // sidestep the cap entirely).
+    // The minimum-stagger thresholds below are intentionally generous to
+    // catch any future "let me trim a few seconds off" edit that would
+    // tighten the contract beyond what production needs.
     const innerToMiddle = CLIENT_REQUEST_TIMEOUT_MS - PIPELINE_BUDGET_MS;
     const middleToOuter =
       SERVERLESS_EXECUTION_BUDGET_MS - CLIENT_REQUEST_TIMEOUT_MS;
 
-    expect(innerToMiddle).toBeGreaterThanOrEqual(5_000);
-    expect(middleToOuter).toBeGreaterThanOrEqual(2_000);
+    expect(innerToMiddle).toBeGreaterThanOrEqual(10_000);
+    expect(middleToOuter).toBeGreaterThanOrEqual(60_000);
   });
 
   it("locks in the current canonical values to catch unauthorized edits", () => {
     // Any change to these values should be an explicit, reviewed edit —
     // not a drive-by tweak. Pinning the exact values means a future
-    // "I'll just bump this by 2 seconds" patch fails the test and
+    // "I'll just bump this by N seconds" patch fails the test and
     // forces a conversation about the stagger math.
     //
-    // CLIENT_REQUEST_TIMEOUT_MS was bumped from 55_000 to 58_000 to give
-    // 6-image briefs more headroom on Tier 1 DALL-E. See
-    // lib/api/timeouts.ts for the full rationale and trade-off discussion.
-    expect(PIPELINE_BUDGET_MS).toBe(50_000);
-    expect(CLIENT_REQUEST_TIMEOUT_MS).toBe(58_000);
-    expect(SERVERLESS_EXECUTION_BUDGET_MS).toBe(60_000);
+    // History:
+    //   - Original Hobby cascade: 50_000 / 55_000 / 60_000
+    //   - Bumped client to 58_000 to give 6-image Hobby briefs more headroom
+    //   - Upgraded to Vercel Pro: 120_000 / 135_000 / 300_000
+    //
+    // Each route handler must ALSO declare `export const maxDuration = 300`
+    // to actually use Pro's longer duration. Without that export, Vercel
+    // still falls back to 60s. See:
+    //   - app/api/generate/route.ts
+    //   - app/api/orchestrate-brief/route.ts
+    //
+    // See lib/api/timeouts.ts for the full math and trade-off discussion.
+    expect(PIPELINE_BUDGET_MS).toBe(120_000);
+    expect(CLIENT_REQUEST_TIMEOUT_MS).toBe(135_000);
+    expect(SERVERLESS_EXECUTION_BUDGET_MS).toBe(300_000);
   });
 });
