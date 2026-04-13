@@ -58,12 +58,34 @@
 export const SERVERLESS_EXECUTION_BUDGET_MS = 60_000;
 
 /**
- * Client-side `fetch` timeout via `AbortSignal.timeout()`. 5 seconds
- * below Vercel's limit so the client has a chance to receive a real
- * response body for any error the server chooses to surface before
- * Vercel would kill the function.
+ * Client-side `fetch` timeout via `AbortSignal.timeout()`.
+ *
+ * **Bumped from 55_000 → 58_000** to give the pipeline 3 additional
+ * seconds for 6-image briefs on Tier 1 DALL-E. The previous 5-second
+ * stagger from Vercel's 60_000 hard limit was conservative; we're
+ * trading 3 seconds of safety margin for a higher chance that 6-image
+ * briefs complete before the client aborts.
+ *
+ * Risk: if the pipeline takes ~58.5-59.5 seconds, the client will
+ * receive the response just before Vercel's hard kill. The 2-second
+ * remaining margin is tight but defensible for a demo. The server's
+ * PIPELINE_BUDGET_MS check (50s) still fires first to surface a
+ * graceful timeout error if the pipeline genuinely runs over budget.
+ *
+ * Cascade after the bump:
+ *   PIPELINE_BUDGET_MS         (50s) - server graceful timeout point
+ *   CLIENT_REQUEST_TIMEOUT_MS  (58s) - client gives up   <-- bumped
+ *   Vercel hard kill           (60s) - platform forced shutdown
+ *
+ * For 1-3 image briefs (which fit in a single DALL-E wave at Tier 1),
+ * this bump is invisible — they complete in 25-30s well under any
+ * timeout. The bump only matters at the 6-image edge of the envelope.
+ *
+ * If you need to push this higher, you must ALSO upgrade to Vercel
+ * Pro (300s function duration cap). Until then, 58_000 is the maximum
+ * value that leaves any safety margin against Vercel's 60s.
  */
-export const CLIENT_REQUEST_TIMEOUT_MS = 55_000;
+export const CLIENT_REQUEST_TIMEOUT_MS = 58_000;
 
 /**
  * Server-side pipeline budget. 5 seconds below the client timeout
