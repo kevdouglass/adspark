@@ -27,18 +27,51 @@ import { withRetry, isRetryableOpenAIError } from "./retry";
 /**
  * Maximum number of concurrent DALL-E 3 requests.
  *
- * OpenAI DALL-E 3 Tier 1 quota is ~5 images per minute. Running 5 in
- * parallel per batch means a 6-image brief splits into two waves of
- * 5+1, which is the calibration baseline for `PIPELINE_BUDGET_MS` in
- * `lib/api/timeouts.ts`. If you change this value, recompute that
- * budget — the pipeline.ts JSDoc references this constant explicitly
- * so a diff here forces re-review of the timing math.
+ * **Lowered from 5 → 3** to improve Tier 1 reliability on multi-image briefs.
+ * See SPIKE-002 (`docs/spikes/SPIKE-002-pipeline-latency-audit.md`) and
+ * GitHub issue #59 for the latency audit that motivated this.
  *
- * Tier 2+ accounts can raise this to 10+ for single-wave generation
- * of 6-image briefs, which cuts wall-clock roughly in half. For a POC
- * targeting Tier 1 quotas, 5 is the safe ceiling.
+ * Math for 6 images at Tier 1 (~22s p75 per image, 5 RPM cap):
+ *
+ *   limit=5: wave 1 (5 parallel) + wave 2 (1 alone)     = ~44s wall time
+ *   limit=3: wave 1 (3 parallel) + wave 2 (3 parallel)  = ~44s wall time
+ *   limit=2: 3 sequential waves                          = ~66s wall time (WORSE)
+ *   limit=1: fully sequential                            = ~132s wall time (BAD)
+ *
+ * limit=5 and limit=3 are TIED on best-case wall time (both run 2 waves of
+ * ~22s each). The reason to prefer 3 over 5 is **reliability** under Tier 1's
+ * rate-limit bucket:
+ *
+ *   - With limit=5, wave 1 burns the entire 5-req-per-minute budget at T+0.
+ *     The lone wave-2 request fires at T+22s, slamming a still-empty bucket
+ *     (the rolling minute hasn't refilled) and reliably hitting 429 → forces
+ *     a 12s retry that pushes wall time to ~56s, dangerously close to the
+ *     50s pipeline budget and the 60s Vercel cap.
+ *
+ *   - With limit=3, wave 1 uses 3/5 of the budget at T+0. Wave 2 fires at
+ *     T+22s using the remaining 2 + the 3 that may have refilled by then,
+ *     spreading the load more evenly. Far fewer 429s in practice.
+ *
+ *   - The "straggler problem" is also eliminated: limit=5 leaves 1 image
+ *     alone in wave 2, where the slowest single p75 sample determines wait
+ *     time. limit=3 puts 3 images together in wave 2, so the slowest of 3
+ *     determines the wait — same average but smaller worst case.
+ *
+ * Trade-off: this makes 4-image and 5-image briefs SLOWER than they were
+ * (they used to fit in 1 wave at limit=5; now they split into 3+1 or 3+2
+ * = 2 waves). The actual sample briefs in `lib/briefs/sampleBriefs.ts` and
+ * `examples/campaigns/` are 1, 3, 6, or 9 images — none in the 4-5 range —
+ * so this trade is favorable for every committed demo brief.
+ *
+ * Tier 2+ accounts can raise this to 7-10 — single-wave generation of 6-9
+ * image briefs cuts wall-clock roughly in half. For Tier 1 we stay at 3 to
+ * maximize reliability over best-case speed.
+ *
+ * If you change this value, recompute PIPELINE_BUDGET_MS in
+ * lib/api/timeouts.ts — pipeline.ts JSDoc references this constant
+ * explicitly so a diff here forces re-review of the timing math.
  */
-export const DALLE_CONCURRENCY_LIMIT = 5;
+export const DALLE_CONCURRENCY_LIMIT = 3;
 
 /**
  * Retry base delay (ms). Exponential backoff: attempt 1 fail → wait
