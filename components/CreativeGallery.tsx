@@ -248,12 +248,35 @@ function CreativeCard({
       <div
         className={`relative w-full overflow-hidden bg-[var(--surface)] ${aspectClass(creative.aspectRatio)}`}
       >
+        {/*
+          crossOrigin="anonymous" is REQUIRED to fix Cross-Origin Read
+          Blocking (CORB) when loading images from S3 pre-signed URLs.
+
+          Without it, Chromium reports CORB warnings and on stricter
+          browser configurations actually blocks the image from
+          rendering — even though the response has a valid
+          `Content-Type: image/png` header. CORB sometimes blocks
+          cross-origin image loads that arrive without a CORS
+          handshake, especially when the response is large or the
+          browser flags it as suspicious.
+
+          With `crossOrigin="anonymous"`, the browser issues the
+          request in CORS mode (no credentials), and S3's CORS rule
+          (`AllowedOrigins: ["*"]`, `AllowedMethods: ["GET", "HEAD"]`)
+          returns the proper `Access-Control-Allow-Origin: *` header.
+          The image then loads cleanly with no CORB warnings.
+
+          Trade-off: an extra preflight check happens for the first
+          request to a new origin, but it's cached for the bucket's
+          `MaxAgeSeconds` (3000s = 50 min). Negligible for the demo.
+        */}
         <Image
           src={imageSrc}
           alt={`${creative.productName} — ${platformLabel(creative.aspectRatio)}`}
           fill
           sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
           className="object-cover"
+          crossOrigin="anonymous"
           unoptimized
         />
 
