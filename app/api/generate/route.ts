@@ -235,10 +235,38 @@ export async function POST(request: Request): Promise<Response> {
     // error.message may contain stack traces, SDK internals, or secrets
     // echoed in URLs. Log the original server-side, send generic to client.
     console.error(`[${ctx.requestId}] Catastrophic pipeline error:`, error);
+
+    // Issue #59 follow-up — surface SAFE error metadata to the client so the
+    // browser network tab can show enough to diagnose without leaking
+    // secrets. The error class name (e.g. "TypeError", "OpenAI.APIError",
+    // "S3ServiceException") tells you WHICH library or pattern failed; the
+    // first stack frame tells you WHERE without exposing the message
+    // content (which may contain values, URLs, or sanitized PII).
+    const errorMeta: string[] = [];
+    if (error instanceof Error) {
+      errorMeta.push(`type: ${error.constructor.name}`);
+      if (error.stack) {
+        const firstFrame = error.stack
+          .split("\n")
+          .map((line) => line.trim())
+          .find((line) => line.startsWith("at "));
+        if (firstFrame) {
+          // Strip absolute file paths (which may contain usernames) — keep
+          // only the file basename + line number for safe public surface.
+          const safeFrame = firstFrame.replace(
+            /\(?(?:[a-zA-Z]:)?[\\/].*[\\/]([^\\/]+:\d+:\d+)\)?$/,
+            "($1)"
+          );
+          errorMeta.push(`origin: ${safeFrame}`);
+        }
+      }
+    }
+
     const errorBody = buildApiError(
       "INTERNAL_ERROR",
       sanitizeErrorMessage(error),
-      ctx.requestId
+      ctx.requestId,
+      errorMeta.length > 0 ? errorMeta : undefined
     ) satisfies ApiError;
     return NextResponse.json(errorBody, { status: 500 });
   }
