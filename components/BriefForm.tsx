@@ -52,6 +52,7 @@ import {
 } from "@/components/BriefGeneratorAI";
 import type { ApiError } from "@/lib/api/errors";
 import { ORCHESTRATE_CLIENT_TIMEOUT_MS } from "@/lib/api/timeouts";
+import { uploadAsset } from "@/lib/api/client";
 
 const ASPECT_RATIOS: AspectRatio[] = ["1:1", "9:16", "16:9"];
 const CAMPAIGN_MESSAGE_MAX = 140;
@@ -802,14 +803,175 @@ function ProductField({
           />
         </Field>
 
-        {/* existingAsset is part of the schema but hidden in the UI —
-            ADS-013 (pre-signed S3 uploads) will add the real upload control */}
+        {/* Product asset (optional) — two-step upload flow (SPIKE-003).
+            Hidden before Block C of interview prep; now a real file
+            picker that POSTs via `uploadAsset` and auto-populates the
+            existingAsset form field with the returned storage key. */}
+        <ProductAssetField
+          index={index}
+          control={control}
+          setValue={setValue}
+          disabled={disabled}
+        />
+
+        {/* Invisible registration — keeps react-hook-form aware of the
+            existingAsset field even before the user touches it. The
+            visible control above writes to the same form path via
+            `setValue`. We pass `value={null as unknown as string}` so
+            the initial state matches the schema's nullable default. */}
         <input
           type="hidden"
           {...register(`products.${index}.existingAsset`)}
-          value=""
         />
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProductAssetField — per-product file picker (SPIKE-003)
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders the visible upload control for a single product's
+ * `existingAsset`. Three states:
+ *
+ * 1. **Empty** — dashed-border file picker. User clicks or drops a file.
+ * 2. **Uploading** — the same box, label swapped to "Uploading…", disabled.
+ * 3. **Populated** — monospaced pill showing the storage key + a "Clear"
+ *    button that nulls the field.
+ *
+ * The upload state (`uploading`, `error`) is component-local React state,
+ * NOT react-hook-form state. The form only ever sees the final
+ * `existingAsset` value — either `null` or a storage key — which is
+ * exactly what the Zod schema + pipeline expect.
+ *
+ * Uses `useWatch` to subscribe to the current `existingAsset` value so
+ * the display flips between states without re-rendering the whole form.
+ * Mirrors the `ColorFieldBody` hook pattern already in this file.
+ */
+function ProductAssetField({
+  index,
+  control,
+  setValue,
+  disabled,
+}: {
+  index: number;
+  control: Control<GenerateRequestBody>;
+  setValue: BriefSetValue;
+  disabled: boolean;
+}) {
+  const existingAsset = useWatch({
+    control,
+    name: `products.${index}.existingAsset`,
+  });
+  const campaignId = useWatch({ control, name: "campaign.id" });
+
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      // Pass the current campaign id through so the storage key is
+      // grouped under the right campaign folder. Empty string (the form's
+      // default for new briefs) becomes `undefined` — the server falls
+      // back to the `"adhoc"` namespace, which is fine.
+      const result = await uploadAsset(file, {
+        campaignId: campaignId || undefined,
+      });
+
+      // CRITICAL: save the KEY, not the uploadUrl. See SPIKE-003
+      // §Recommended frontend flow + INVESTIGATION-003 §Risk register.
+      // A drift here breaks the reuse branch silently.
+      setValue(`products.${index}.existingAsset`, result.key, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setIsUploading(false);
+      // Reset the input so the same file can be re-selected after
+      // failure. Without this, re-picking the same filename would not
+      // fire `onChange` because the DOM value is unchanged.
+      e.target.value = "";
+    }
+  }
+
+  function handleClear() {
+    setValue(`products.${index}.existingAsset`, null, {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setUploadError(null);
+  }
+
+  return (
+    <div className="space-y-1">
+      <label className="block text-xs font-semibold uppercase tracking-wide text-[var(--ink-muted)]">
+        Product Asset (optional)
+      </label>
+
+      {existingAsset ? (
+        // Populated state — show the key + Clear button
+        <div className="flex items-center justify-between gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+              Will reuse — DALL-E skipped for this product
+            </p>
+            <p className="truncate font-mono text-xs text-emerald-900">
+              {existingAsset}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleClear}
+            disabled={disabled}
+            className="flex-shrink-0 text-xs font-medium text-emerald-700 underline hover:text-emerald-900 disabled:opacity-50"
+          >
+            Clear
+          </button>
+        </div>
+      ) : (
+        // Empty state — file picker
+        <label
+          className={`flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-[var(--border-strong)] bg-[var(--bg)] px-3 py-3 text-center text-xs transition-colors ${
+            disabled || isUploading
+              ? "cursor-not-allowed opacity-50"
+              : "hover:bg-[var(--surface-hover)]"
+          }`}
+        >
+          <input
+            type="file"
+            accept="image/png,image/webp,image/jpeg"
+            className="sr-only"
+            disabled={disabled || isUploading}
+            onChange={handleFileChange}
+          />
+          <span className="text-[var(--ink-muted)]">
+            {isUploading
+              ? "Uploading…"
+              : "Upload a product image (PNG / WebP / JPEG, ≤10 MB)"}
+          </span>
+        </label>
+      )}
+
+      {uploadError && (
+        <p role="alert" className="text-xs text-[var(--error)]">
+          {uploadError}
+        </p>
+      )}
+
+      <p className="text-[10px] text-[var(--ink-subtle)]">
+        Leave blank to generate with DALL-E. Upload a real product photo to
+        reuse it — the pipeline skips DALL-E for this product and composites
+        the campaign message onto your image.
+      </p>
     </div>
   );
 }

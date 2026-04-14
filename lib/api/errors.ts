@@ -271,3 +271,99 @@ export function buildApiError(
 export function sanitizeErrorMessage(_error: unknown): string {
   return GENERIC_INTERNAL_ERROR_MESSAGE;
 }
+
+// ---------------------------------------------------------------------------
+// Binary body reader with stream-level byte cap (SPIKE-003 Adjustment 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maximum upload body size in bytes. 10 MB is generous for a single image:
+ * a real DALL-E 1024×1024 PNG is ~2-3 MB; a 9:16 vertical at 1080×1920 tops
+ * out around 5 MB. The cap prevents memory exhaustion from a compromised or
+ * buggy client. Mirrors `MAX_FILE_SIZE_BYTES` in `app/api/files/[...path]/route.ts`
+ * so the serving path and the upload path agree on the ceiling.
+ *
+ * IMPORTANT for Vercel Hobby tier: Vercel's Edge runtime caps request bodies
+ * at 4.5 MB, so this 10 MB value is advisory when running on Vercel Hobby.
+ * The `route.ts` upload handler declares `runtime = "nodejs"` which has
+ * no hard Vercel body cap on Pro, but Hobby still applies. Documented in
+ * SPIKE-003 §Risk register.
+ */
+export const MAX_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Read a Request body into a Buffer with a hard byte limit enforced at
+ * the stream level.
+ *
+ * Sibling to `readBodyWithLimit` (which decodes to UTF-8 text for JSON
+ * bodies). This variant returns the raw bytes — required by the upload
+ * PUT route, which accepts image binary payloads.
+ *
+ * WHY a stream-level cap instead of `Content-Length` or `arrayBuffer()`:
+ *
+ * - `Content-Length` headers are client-supplied and can be omitted via
+ *   chunked transfer encoding or simply lied about. Trusting the header
+ *   lets a malicious client claim 100 bytes and then stream 10 GB.
+ * - `await request.arrayBuffer()` reads the ENTIRE body into memory before
+ *   any size check fires. A 10 GB body would allocate a 10 GB buffer and
+ *   crash the server process before the caller gets a chance to reject it.
+ *
+ * The stream-chunk loop below reads incrementally, tracks the cumulative
+ * byte count, and cancels the reader (releasing the underlying socket) the
+ * instant the cap is exceeded. No allocation larger than the cap can happen.
+ *
+ * Returns a discriminated union so callers handle both paths explicitly —
+ * matches the existing `readBodyWithLimit` shape.
+ */
+export async function readBinaryBodyWithLimit(
+  request: Request,
+  maxBytes: number
+): Promise<
+  | { ok: true; data: Buffer }
+  | { ok: false; reason: "too_large" | "read_error" | "empty" }
+> {
+  if (!request.body) {
+    return { ok: false, reason: "empty" };
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        // Cancel the underlying stream immediately so bytes stop flowing.
+        // We intentionally swallow any cancel() rejection because the
+        // important thing is that we stop reading — the caller's response
+        // will include the 413 either way.
+        reader.cancel().catch(() => {
+          // ignore cancel errors
+        });
+        return { ok: false, reason: "too_large" };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, reason: "read_error" };
+  }
+
+  if (totalBytes === 0) {
+    return { ok: false, reason: "empty" };
+  }
+
+  // Concatenate the stream chunks into a single Buffer. Pre-allocating
+  // with `Buffer.alloc(totalBytes)` is O(n) in total bytes and avoids
+  // the repeated reallocation that `Buffer.concat` on a large array
+  // can incur.
+  const merged = Buffer.alloc(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, data: merged };
+}
