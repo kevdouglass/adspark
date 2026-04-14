@@ -22,6 +22,7 @@ import type {
   PipelineError,
   PipelineErrorCause,
 } from "./types";
+import { CreativeSource } from "./types";
 import { withRetry, isRetryableOpenAIError } from "./retry";
 import type { RequestContext } from "@/lib/api/services";
 import { LogEvents } from "@/lib/api/logEvents";
@@ -222,7 +223,16 @@ export async function generateImage(
 
   const generationTimeMs = Math.round(performance.now() - start);
 
-  return { task, imageBuffer, generationTimeMs };
+  // Every image that flows through this function came from a real DALL-E
+  // call — the reuse branch short-circuits in `pipeline.ts` and never
+  // calls generateImage(). Tagging explicitly (instead of inferring from
+  // `generationTimeMs > 0`) keeps the invariant readable downstream.
+  return {
+    task,
+    imageBuffer,
+    generationTimeMs,
+    sourceType: CreativeSource.Generated,
+  };
 }
 
 /**

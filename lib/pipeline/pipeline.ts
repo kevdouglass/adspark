@@ -37,6 +37,7 @@ import type {
   PipelineStage,
   StorageProvider,
 } from "./types";
+import { CreativeSource } from "./types";
 import type { RequestContext } from "@/lib/api/services";
 import { LogEvents } from "@/lib/api/logEvents";
 import { parseBrief } from "./briefParser";
@@ -273,6 +274,13 @@ export async function runPipeline(
       task,
       imageBuffer: buffer,
       generationTimeMs: 0, // Reused, not generated
+      // Explicit tag — this is the only place in the pipeline where
+      // sourceType "reused" is produced. Downstream consumers (Creative,
+      // CreativeOutput, manifest, API response, UI badge) read this field
+      // directly rather than inferring from generationTimeMs === 0.
+      // The read sites still compare against the string literals
+      // `"reused"` / `"generated"` because the union type accepts both.
+      sourceType: CreativeSource.Reused,
     };
   });
 
@@ -384,6 +392,11 @@ async function compositeCreatives(
         imageBuffer: compositedBuffer,
         generationTimeMs: image.generationTimeMs,
         compositingTimeMs,
+        // Carry the upstream tag through — set by generateImage() for the
+        // DALL-E branch and by the reusedImages mapping above for the
+        // reuse branch. compositeCreatives is pure plumbing; it never
+        // decides sourceType itself.
+        sourceType: image.sourceType,
       };
     })
   );

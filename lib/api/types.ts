@@ -35,9 +35,11 @@ import type { z } from "zod";
 import type { campaignBriefSchema } from "@/lib/pipeline/briefParser";
 import type {
   AspectRatio,
+  CreativeSourceType,
   PipelineErrorCause,
   PipelineStage,
 } from "@/lib/pipeline/types";
+import type { RunSummary } from "@/lib/pipeline/runSummary";
 
 // ---------------------------------------------------------------------------
 // Request body
@@ -92,6 +94,14 @@ export interface ApiCreativeOutput {
   prompt: string;
   generationTimeMs: number;
   compositingTimeMs: number;
+  /**
+   * DELIBERATE: surfaces the reuse vs generate distinction over the wire
+   * so the UI can render a "Reused" / "Generated" badge on each card and
+   * the reviewer can see which branch produced each creative without
+   * opening the manifest. Added in Block C of interview prep — closes
+   * the assignment's "reuse input assets when available" visibility gap.
+   */
+  sourceType: CreativeSourceType;
 }
 
 /**
@@ -132,6 +142,85 @@ export interface GenerateSuccessResponseBody {
   totalImages: number;
   errors: ApiPipelineError[];
   requestId: string;
+  /**
+   * Aggregated run summary — distinct product count, reused vs generated
+   * counts, failed creatives, status, total time. Derived by the mapper
+   * via `computeRunSummary()` (same helper the manifest uses, so the
+   * manifest and the wire response can never disagree).
+   *
+   * The UI's `RunSummaryPanel` reads this directly for the at-a-glance
+   * count row above the gallery. See `components/RunSummaryPanel.tsx`.
+   *
+   * NOTE: `RunSummary` is imported from `lib/pipeline/runSummary.ts`,
+   * which is a plain data shape with no framework dependencies — safe to
+   * expose over the wire. If future pipeline-only fields ever get added
+   * to `RunSummary`, update this JSDoc and the mapper alongside them.
+   */
+  summary: RunSummary;
+}
+
+// ---------------------------------------------------------------------------
+// Upload flow wire types (SPIKE-003 / INVESTIGATION-003)
+// ---------------------------------------------------------------------------
+
+/**
+ * Request body for `POST /api/upload` (step 1 — init).
+ *
+ * The client sends the filename + content type + optional campaign id;
+ * the server validates, builds a safe storage key, and returns an
+ * upload target URL (step 2). The body is small JSON — no binary here.
+ *
+ * The `contentType` field is constrained to the image MIMEs the
+ * pipeline can consume (PNG / JPEG / WebP). Any other value is
+ * rejected with 400 INVALID_BRIEF before the server builds the key.
+ */
+export interface UploadInitRequestBody {
+  filename: string;
+  contentType: "image/png" | "image/jpeg" | "image/webp";
+  /**
+   * Optional — when provided, the storage key includes the campaign id
+   * for grouping (`assets/<campaignId>/<timestamp>-<name>.<ext>`).
+   * Falls back to `"adhoc"` if omitted.
+   */
+  campaignId?: string;
+}
+
+/**
+ * Response body for `POST /api/upload` (step 1 — init).
+ *
+ * The client does a follow-up PUT to `uploadUrl` with the raw image
+ * bytes. In S3 mode, `uploadUrl` is a pre-signed S3 PUT URL — the
+ * browser talks directly to S3, bypassing the Next.js function. In
+ * local mode, `uploadUrl` points back at `PUT /api/upload?key=...` which
+ * writes via `LocalStorage.save()`.
+ *
+ * CRITICAL: the client must save `key` (NOT `uploadUrl`) into the
+ * brief's `product.existingAsset` field. Signed URLs expire; keys
+ * don't. The reuse branch in `assetResolver.resolveOne` expects a
+ * storage key. See INVESTIGATION-003 §Deep audit E.
+ *
+ * See ADR-006 — this is an API-layer type with no domain projection,
+ * so a plain interface is fine (no parallel-shapes mapper needed).
+ */
+export interface UploadInitResponseBody {
+  /** URL the client should PUT the bytes to. Local or pre-signed S3. */
+  uploadUrl: string;
+  /**
+   * The storage key — save this to `product.existingAsset` after the
+   * PUT succeeds. NOT the URL.
+   */
+  key: string;
+  /** HTTP method for the follow-up upload. Always "PUT" in this design. */
+  method: "PUT";
+  /** Headers the client must send on the follow-up PUT (e.g. Content-Type). */
+  headers: Record<string, string>;
+  /**
+   * URL the frontend can use to preview the uploaded asset after the
+   * PUT completes. In local mode this is `/api/files/<key>`. In S3 mode
+   * this is NOT populated — the GET URL is minted at brief submission
+   * time via `S3Storage.getUrl()`, not at upload time.
+   */
+  assetUrl: string | null;
 }
 
 // ---------------------------------------------------------------------------

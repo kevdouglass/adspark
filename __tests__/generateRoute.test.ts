@@ -447,6 +447,7 @@ describe("POST /api/generate", () => {
             "A premium sun protection product: SPF 50 Mineral Sunscreen. Reef-safe mineral sunscreen with non-nano zinc oxide. Key features: reef-safe, mineral formula. The product's brand color palette is #F4A261. Designed for Health-conscious adults 25-45 in North America. The mood is vibrant, trustworthy, active lifestyle. Setting: warm golden-hour sunlight. Square composition. Center the product prominently. Photorealistic commercial product photography. Do not include any text. People may appear naturally in the scene.",
           generationTimeMs: 22340,
           compositingTimeMs: 412,
+          sourceType: "generated" as const,
         },
         {
           productName: "SPF 50 Mineral Sunscreen",
@@ -465,6 +466,7 @@ describe("POST /api/generate", () => {
             "A premium sun protection product: SPF 50 Mineral Sunscreen. Reef-safe mineral sunscreen. Vertical composition for mobile Stories/Reels. Position the product in the upper two-thirds.",
           generationTimeMs: 21890,
           compositingTimeMs: 401,
+          sourceType: "generated" as const,
         },
         {
           productName: "SPF 50 Mineral Sunscreen",
@@ -483,6 +485,7 @@ describe("POST /api/generate", () => {
             "A premium sun protection product: SPF 50 Mineral Sunscreen. Wide horizontal banner composition.",
           generationTimeMs: 22102,
           compositingTimeMs: 388,
+          sourceType: "generated" as const,
         },
         {
           productName: "After-Sun Aloe Gel",
@@ -498,6 +501,7 @@ describe("POST /api/generate", () => {
           prompt: "A premium skincare product: After-Sun Aloe Gel.",
           generationTimeMs: 23001,
           compositingTimeMs: 423,
+          sourceType: "generated" as const,
         },
         {
           productName: "After-Sun Aloe Gel",
@@ -513,6 +517,7 @@ describe("POST /api/generate", () => {
           prompt: "A premium skincare product: After-Sun Aloe Gel.",
           generationTimeMs: 22500,
           compositingTimeMs: 405,
+          sourceType: "generated" as const,
         },
         {
           productName: "After-Sun Aloe Gel",
@@ -528,6 +533,7 @@ describe("POST /api/generate", () => {
           prompt: "A premium skincare product: After-Sun Aloe Gel.",
           generationTimeMs: 22250,
           compositingTimeMs: 395,
+          sourceType: "generated" as const,
         },
       ],
       totalTimeMs: 47823,
@@ -557,6 +563,7 @@ describe("POST /api/generate", () => {
     expect(body).toHaveProperty("totalImages");
     expect(body).toHaveProperty("errors");
     expect(body).toHaveProperty("requestId");
+    expect(body).toHaveProperty("summary");
 
     // ---- Assert: top-level types and values ----
     expect(typeof body.campaignId).toBe("string");
@@ -591,6 +598,8 @@ describe("POST /api/generate", () => {
       expect(creative).toHaveProperty("prompt");
       expect(creative).toHaveProperty("generationTimeMs");
       expect(creative).toHaveProperty("compositingTimeMs");
+      expect(creative).toHaveProperty("sourceType");
+      expect(["reused", "generated"]).toContain(creative.sourceType);
 
       // Field types
       expect(typeof creative.productName).toBe("string");
@@ -649,10 +658,29 @@ describe("POST /api/generate", () => {
       "totalImages",
       "errors",
       "requestId",
+      "summary",
     ]);
     for (const key of Object.keys(body)) {
       expect(expectedKeys).toContain(key);
     }
+
+    // ---- Assert: summary block shape + consistency with creatives ----
+    // The summary is derived by `computeRunSummary()` in the mapper; we
+    // don't re-derive it here, we just verify it's the right shape and
+    // its headline counts match the creatives we already asserted above.
+    // A drift between these numbers and the creatives array would mean
+    // the on-disk manifest and the wire response disagree — the whole
+    // point of the shared helper is to make that impossible.
+    expect(body.summary).toMatchObject({
+      totalCreatives: 6,
+      totalProducts: 2,
+      reusedAssets: 0, // mocked pipeline has sourceType: "generated" everywhere
+      generatedAssets: 6,
+      failedCreatives: 0,
+      status: "complete",
+    });
+    expect(typeof body.summary.totalTimeMs).toBe("number");
+    expect(body.summary.totalTimeMs).toBeGreaterThan(0);
   });
 
   it("generates unique requestId per request (isolation)", async () => {

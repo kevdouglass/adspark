@@ -21,6 +21,7 @@ import type {
   PipelineError,
   PipelineResult,
 } from "@/lib/pipeline/types";
+import { computeRunSummary } from "@/lib/pipeline/runSummary";
 import type {
   ApiCreativeOutput,
   ApiPipelineError,
@@ -48,6 +49,7 @@ function toApiCreativeOutput(creative: CreativeOutput): ApiCreativeOutput {
     prompt: creative.prompt,
     generationTimeMs: creative.generationTimeMs,
     compositingTimeMs: creative.compositingTimeMs,
+    sourceType: creative.sourceType,
   };
 }
 
@@ -97,5 +99,14 @@ export function toGenerateSuccessResponseBody(
     totalImages: result.totalImages,
     errors: result.errors.map(toApiPipelineError),
     requestId,
+    // Same helper the manifest uses — see lib/pipeline/runSummary.ts.
+    // The manifest and the wire response therefore compute identical
+    // counts from identical inputs, so a reviewer diffing them will
+    // never see drift.
+    summary: computeRunSummary(
+      result.creatives,
+      result.errors,
+      result.totalTimeMs
+    ),
   };
 }

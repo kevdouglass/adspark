@@ -71,11 +71,73 @@ export interface ImageDimensions {
   dalleSize: "1024x1024" | "1024x1792" | "1792x1024";
 }
 
+/**
+ * How an image buffer reached the compositing stage.
+ *
+ * - `generated` — produced by a fresh DALL-E 3 call (`generationTimeMs > 0`)
+ * - `reused`    — loaded from the asset library (seed dirs or local output)
+ *                 via `assetResolver.resolveOne` (`generationTimeMs === 0`)
+ *
+ * Propagated from `GeneratedImage` → `Creative` → `CreativeOutput` → manifest
+ * → API response → UI badge. The assignment's "reuse input assets when
+ * available" requirement is invisible without this — see
+ * `examples/campaigns/coastal-sun-protection/` for the canonical demo.
+ *
+ * --- shape decisions ---
+ *
+ * This is modeled as an `as const` object plus a derived union type rather
+ * than a TypeScript `enum`. Three reasons:
+ *
+ *   1. **Wire format stays a plain string.** `JSON.stringify` produces
+ *      `"reused"` / `"generated"` directly — no enum reverse-lookup object,
+ *      no numeric serialization, no surprises in the manifest. A reviewer
+ *      grepping `manifest.json` sees the literal word they expect.
+ *
+ *   2. **Zero-cost at read sites.** Existing code that writes
+ *      `sourceType: "generated"` or compares `creative.sourceType === "reused"`
+ *      still type-checks unchanged, because the union `CreativeSourceType`
+ *      is `"reused" | "generated"`. Callers can use either the constants
+ *      (`CreativeSource.Reused`) or the literals (`"reused"`) interchangeably.
+ *
+ *   3. **Runtime iterability.** `CREATIVE_SOURCE_VALUES` gives us
+ *      `["reused", "generated"]` for UI filter rendering, test assertions,
+ *      Zod schemas (`z.enum(CREATIVE_SOURCE_VALUES)`), and any future
+ *      consumer that needs to enumerate every variant at runtime.
+ *
+ * The two *write* sites (where a literal is produced, not consumed) are
+ * `lib/pipeline/imageGenerator.ts` and `lib/pipeline/pipeline.ts` — both
+ * use the `CreativeSource.*` constants below. Every read site continues
+ * to use plain string comparisons.
+ */
+export const CreativeSource = {
+  Reused: "reused",
+  Generated: "generated",
+} as const;
+
+/**
+ * Derived union type — stays `"reused" | "generated"` so existing
+ * literal-based code keeps working. TypeScript narrows correctly against
+ * both the constants and plain string literals.
+ */
+export type CreativeSourceType =
+  (typeof CreativeSource)[keyof typeof CreativeSource];
+
+/**
+ * Runtime iterator — every valid `CreativeSourceType` value in a stable
+ * insertion order. Typed as `readonly [CreativeSourceType, ...]` so it
+ * can be passed directly to `z.enum()` without a cast.
+ */
+export const CREATIVE_SOURCE_VALUES = Object.values(
+  CreativeSource
+) as readonly CreativeSourceType[];
+
 /** Result of DALL-E 3 image generation (before text overlay) */
 export interface GeneratedImage {
   task: GenerationTask;
   imageBuffer: Buffer;
   generationTimeMs: number;
+  /** See CreativeSourceType — distinguishes a DALL-E call from an asset reuse. */
+  sourceType: CreativeSourceType;
 }
 
 /** Final composited creative (after text overlay) */
@@ -92,6 +154,8 @@ export interface Creative {
   imageBuffer: Buffer;
   generationTimeMs: number;
   compositingTimeMs: number;
+  /** Carried from the upstream GeneratedImage — see CreativeSourceType. */
+  sourceType: CreativeSourceType;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +186,8 @@ export interface CreativeOutput {
   prompt: string;
   generationTimeMs: number;
   compositingTimeMs: number;
+  /** Carried from the upstream Creative — see CreativeSourceType. */
+  sourceType: CreativeSourceType;
 }
 
 /**
