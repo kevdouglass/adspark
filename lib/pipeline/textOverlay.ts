@@ -24,14 +24,77 @@ import type { ImageDimensions } from "./types";
 // Constants — text overlay layout configuration
 // ---------------------------------------------------------------------------
 
-/** Band occupies the bottom 25% of the image */
-const BAND_HEIGHT_RATIO = 0.25;
+/**
+ * Band occupies the bottom 28% of the image.
+ *
+ * Bumped from 25% → 28% so multi-line overlays on 16:9 (the narrowest
+ * vertical footprint at 675px total height) have adequate breathing
+ * room between the text and the bottom edge. At 25% the band was 169px
+ * tall on 16:9, and a single line of 60px-font text ate 78px of that
+ * with only ~45px of margin top/bottom — visually cramped. 28% gives
+ * ~189px of band height on 16:9, comfortable for a single line with
+ * real padding, and still leaves 72% of the image for the hero visual.
+ */
+const BAND_HEIGHT_RATIO = 0.28;
 
-/** Semi-transparent black background for text legibility */
-const BAND_COLOR = "rgba(0, 0, 0, 0.6)";
-
-/** White text for maximum contrast on dark band */
+/**
+ * White text for maximum contrast on the dark gradient band below.
+ *
+ * Paired with canvas shadow properties (see TEXT_SHADOW_* below) so the
+ * text maintains crisp edges even when the gradient fades to
+ * semi-transparent at its top edge.
+ */
 const TEXT_COLOR = "#FFFFFF";
+
+/**
+ * Bottom-edge opacity of the gradient band.
+ *
+ * Previously the band was a flat `rgba(0, 0, 0, 0.6)` rectangle — fine
+ * for simple backgrounds but insufficient on busy DALL-E outputs where
+ * product detail, people, and environmental color bleed through and
+ * fight the white text. 0.85 at the bottom guarantees readable contrast
+ * against any underlying hue.
+ *
+ * The TOP of the band is fully transparent (`rgba(0, 0, 0, 0)`) and the
+ * gradient interpolates between them — see the `createLinearGradient`
+ * call in `overlayText`. This kills the hard horizontal edge the old
+ * `fillRect` approach produced, which read as "slapped on" rather than
+ * "integrated with the composition".
+ */
+const BAND_OPACITY_BOTTOM = 0.85;
+
+/**
+ * Mid-point opacity for the gradient.
+ *
+ * A linear two-stop gradient from 0 → 0.85 makes the band look washed-
+ * out in the top third. Adding a third stop at ~30% of the band height
+ * with opacity around half of the bottom value gives the transition a
+ * smoother, more photographic curve — the top 30% of the band fades
+ * gently while the bottom 70% darkens firmly.
+ */
+const BAND_OPACITY_MID = 0.42;
+
+/**
+ * Canvas text-shadow configuration.
+ *
+ * `shadowBlur` with `shadowColor = "rgba(0, 0, 0, 0.9)"` gives white text
+ * a 1px halo of darkness that crisps the glyph edges on any background.
+ * `shadowOffsetY` adds a subtle drop-shadow effect — purely aesthetic,
+ * matches modern ad typography (Instagram Stories, TikTok overlays).
+ *
+ * WHY NOT use `strokeText` with `strokeStyle`: stroke renders INSIDE the
+ * glyph outline, thickening the letterforms and making them look "puffy"
+ * at the font sizes we use (54px-70px). Shadow renders OUTSIDE the
+ * outline, preserving the letterforms at their native weight.
+ *
+ * Enabled on the Skia canvas via `context.shadowColor`, `context.shadowBlur`,
+ * `context.shadowOffsetX`, `context.shadowOffsetY` immediately before the
+ * `fillText` calls.
+ */
+const TEXT_SHADOW_COLOR = "rgba(0, 0, 0, 0.9)";
+const TEXT_SHADOW_BLUR = 10;
+const TEXT_SHADOW_OFFSET_X = 0;
+const TEXT_SHADOW_OFFSET_Y = 3;
 
 /** Font size scales with image width for responsive text across aspect ratios */
 const FONT_SIZE_DIVISOR = 20;
@@ -264,13 +327,37 @@ export async function overlayText(
     return sharp(canvasBuffer).png({ compressionLevel: 6 }).toBuffer();
   }
 
-  // Step 5: Draw semi-transparent band in bottom 25%
+  // Step 5: Draw the gradient band in the bottom portion of the image.
+  //
+  // Uses `createLinearGradient` (top of band → bottom of band) with three
+  // stops so the band fades from fully transparent at its top edge to
+  // fully opaque (BAND_OPACITY_BOTTOM) at the image's bottom edge. This
+  // eliminates the hard horizontal line the old `fillRect` approach
+  // produced, which made the band read as "pasted on" rather than
+  // integrated with the underlying image.
+  //
+  // The three-stop curve (0 at top → BAND_OPACITY_MID at ~30% → BAND_OPACITY_BOTTOM
+  // at bottom) is not strictly linear — the lower two thirds darken
+  // faster than the top third. This matches photographic burn-in
+  // techniques used in real ad posters: the text sits on the densest
+  // part of the fade, while the top third softens the transition into
+  // the hero image.
   const bandHeight = Math.round(height * BAND_HEIGHT_RATIO);
   const bandY = height - bandHeight;
-  context.fillStyle = BAND_COLOR;
+  const gradient = context.createLinearGradient(0, bandY, 0, height);
+  gradient.addColorStop(0, "rgba(0, 0, 0, 0)");
+  gradient.addColorStop(0.3, `rgba(0, 0, 0, ${BAND_OPACITY_MID})`);
+  gradient.addColorStop(1, `rgba(0, 0, 0, ${BAND_OPACITY_BOTTOM})`);
+  context.fillStyle = gradient;
   context.fillRect(0, bandY, width, bandHeight);
 
-  // Step 6: Configure text rendering styles
+  // Step 6: Configure text rendering styles with a subtle drop shadow.
+  //
+  // The shadow gives white text crisp edges regardless of what the
+  // gradient fades toward at the top of the band. Without it, white
+  // glyphs blur visually into semi-transparent parts of the band and
+  // multi-line messages look washed out on busy backgrounds.
+  //
   // Font: system sans-serif for POC. Production: register brand fonts via
   // GlobalFonts.registerFromPath() — see brand-triage-agent.md (ADS-024).
   // Note: on headless CI/serverless, Skia falls back to a bundled default.
@@ -278,6 +365,10 @@ export async function overlayText(
   context.fillStyle = TEXT_COLOR;
   context.textAlign = "center";
   context.textBaseline = "middle";
+  context.shadowColor = TEXT_SHADOW_COLOR;
+  context.shadowBlur = TEXT_SHADOW_BLUR;
+  context.shadowOffsetX = TEXT_SHADOW_OFFSET_X;
+  context.shadowOffsetY = TEXT_SHADOW_OFFSET_Y;
 
   // Step 7: Render the (already-wrapped) text lines
   // textBaseline = "middle" centers each glyph at its Y coordinate — the
