@@ -38,6 +38,12 @@ knowledge-base/01-assessment/business-context.html
 # Generated output (local dev)
 output/
 
+# Text-overlay preview harness output — produced by
+# `npx tsx scripts/preview-text-overlay.ts` for visual-verification of
+# textOverlay.ts changes. Gitignored because these are dev artifacts;
+# the committed authority is the script that regenerates them.
+tmp/
+
 # Demo script scratch file (scripts/demo.sh writes response bodies here)
 .demo-resp.json
 
