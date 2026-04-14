@@ -22,6 +22,20 @@
       ],
       "color": "#6B3410",
       "existingAsset": null
+    },
+    {
+      "name": "Ember Roast — Colombia Huila",
+      "slug": "ember-huila",
+      "description": "Washed-process Colombia Huila. Caramel sweetness, milk chocolate body, mandarin acidity. A crowd-pleasing daily drinker with pour-over clarity.",
+      "category": "specialty coffee",
+      "keyFeatures": [
+        "single-origin Colombia",
+        "washed process",
+        "tasting notes: caramel, milk chocolate, mandarin",
+        "compostable bag"
+      ],
+      "color": "#8C4A1F",
+      "existingAsset": null
     }
   ],
   "aspectRatios": ["1:1", "9:16", "16:9"],
