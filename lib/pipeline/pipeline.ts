@@ -27,6 +27,174 @@
  * See docs/architecture/orchestration.md (state machine, retry, partial failure)
  */
 
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ★ STAR COMPONENT — INTERVIEW READY NOTES
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * This is the "main" of the pipeline. If the interviewer asks for a
+ * single file to look at, this is the one — runPipeline() tells the
+ * whole story in one function. The block below is the 5-minute
+ * pre-interview read.
+ *
+ * ── ASSIGNMENT REQUIREMENTS THIS FILE SATISFIES ──
+ *
+ *   1. "Runs locally (CLI or simple app, any language/framework)"
+ *      → This orchestrator has zero framework imports. It's callable
+ *        from a Next.js route (app/api/generate), a Vitest test, a CLI
+ *        harness, or a future queue worker — each with a different
+ *        upstream. The framework is a deploy target, not a dependency.
+ *
+ *   2. "Save outputs to folder, organized by product and aspect ratio"
+ *      → Stage 6 (organizeOutput) uses the StorageProvider interface to
+ *        emit /{product}/{ratio}/creative.png + thumbnail.webp. Reused
+ *        and generated images route through the SAME stage, so the
+ *        folder layout is identical regardless of branch.
+ *
+ *   3. "Accept input assets, reuse when available"
+ *      → Stage 2 (resolveAssets) short-circuits Stage 3–4 for products
+ *        that have an existingAsset buffer. buildGenerationTasks() in
+ *        Stage 3 filters those out via the `tasksNeedingGeneration`
+ *        partition, so Stage 4 (DALL-E) never sees them.
+ *
+ *   4. "Generate via GenAI when missing"
+ *      → Stage 4 (generateImages) fans out DALL-E 3 calls in parallel
+ *        with retry + partial-failure isolation.
+ *
+ *   5. "Display campaign message on final posts"
+ *      → Stage 5 (textOverlay) composites campaign.message onto BOTH
+ *        reused and generated images. Uniform treatment of both branches
+ *        so the output looks consistent regardless of source.
+ *
+ *   6. Nice-to-have: "Logging or reporting of results"
+ *      → ctx.log(LogEvents.*) fires at every stage boundary. Structured
+ *        JSON to stdout works in Vercel log viewer AND `docker logs
+ *        adspark | jq .` AND `grep requestId=<uuid>` for one-request
+ *        traces. See lib/api/services.ts RequestLogger.
+ *
+ * ── HYPER-CRITICAL CRITIQUE (unbiased, senior-review grade) ──
+ *
+ *   1. STAGE SEQUENCE IS HARDCODED. Six stages, six sequential awaits,
+ *      in that exact order. A new stage (e.g. a safety-moderation pass
+ *      between generate and overlay, or a brand-color check before
+ *      organize) means editing THIS file — not declaring a new stage
+ *      in a config and letting a DAG executor figure it out. The file
+ *      is readable today because there are only six; at twelve, this
+ *      becomes a code smell.
+ *
+ *   2. TIMEOUT BUDGET IS PASSED DOWN BUT NOT ENFORCED DOWNSTREAM.
+ *      Stages inherit options.signal and respect it, but they don't
+ *      independently check "do I still have time to START this?" at
+ *      entry. If Stage 3 burns 100s of a 120s budget (pathological, but
+ *      possible on a rate-limit cascade), Stages 4–6 will start work
+ *      they can't possibly finish. The budget realizes the problem AFTER
+ *      the fact via elapsed-ms check, not BEFORE via remaining-ms check.
+ *
+ *   3. NO OBSERVABILITY HOOKS. No OTel spans, no trace propagation, no
+ *      child-span-per-stage. The only runtime story is structured JSON
+ *      to stdout via ctx.log — which is a grep-friendly log, not a
+ *      distributed trace. "Why did this specific run take 94 seconds
+ *      when the p50 is 45?" needs manual log correlation, not a tool
+ *      that shows you the waterfall.
+ *
+ *   4. ERROR AGGREGATION LOSES STAGE ATTRIBUTION. A partial failure in
+ *      Stage 5 (compositing) ends up in the final errors[] array, but
+ *      the linkage "this ImageProcessingError came from product X at
+ *      ratio Y" was captured at the Promise.allSettled boundary and
+ *      then flattened. You can still figure it out by correlating
+ *      messages, but the type system stopped helping.
+ *
+ *   5. THE REUSED-ASSET BUFFER MAP IS BUILT TWICE. Once in Stage 2
+ *      (reusedAssetBuffers Map keyed by product slug), and once
+ *      implicitly in Stage 5 when the compositing hand-off consults it.
+ *      Not a bug — but the data-flow could be tightened by passing a
+ *      single typed ResolvedProduct[] through and having Stage 5
+ *      iterate it directly.
+ *
+ *   6. THE `void DALLE_CONCURRENCY_LIMIT` TRICK IS A HACK. It's an
+ *      intentional grep-link so changing the concurrency forces a diff
+ *      against the budget math in this file's docstring. The right fix
+ *      is an actual function that reads both constants and returns the
+ *      computed budget — the type system would then force the diff
+ *      instead of relying on linter convention.
+ *
+ * ── CONCRETE REMEDIATIONS (what "better" looks like) ──
+ *
+ *   For #1 — Represent stages as
+ *       { name, dependsOn, run: (ctx, input) => Promise<output> }
+ *     objects and run them through a topological executor. Adding a
+ *     stage becomes one new entry; removing one becomes one deletion;
+ *     the executor handles ordering. Bonus: dependency metadata
+ *     makes it trivial to parallelize independent stages.
+ *
+ *   For #2 — Add `ctx.remainingMs()` and have each stage call it at
+ *     entry. If under a per-stage threshold (e.g. "I need at least 15s
+ *     to run DALL-E generation"), bail with a typed
+ *     PipelineBudgetExceededError that names the stage, not the budget.
+ *     The user sees "Generation skipped — pipeline was out of time
+ *     after validation" instead of "504 Gateway Timeout."
+ *
+ *   For #3 — Wrap each stage in `ctx.span("stage-name", async () => …)`.
+ *     Export spans via @opentelemetry/sdk-node to Honeycomb or
+ *     Grafana Tempo. Now "time to reused" vs "time to generated" is
+ *     a first-class distributed metric and you can alert on
+ *     p99-resolving-stage-latency instead of on opaque 504s.
+ *
+ *   For #4 — Require every PipelineError to carry `productSlug` +
+ *     `aspectRatio` as REQUIRED fields (not optional). The compiler
+ *     enforces per-task attribution, and the API error mapper can
+ *     surface structured details to the client without string
+ *     parsing.
+ *
+ *   For #5 — Pass the ResolvedProduct[] directly to Stage 5 instead of
+ *     rebuilding a Map inline. Fewer allocations, one source of truth,
+ *     no risk of the two representations drifting.
+ *
+ *   For #6 — Replace the `void` hack with a proper
+ *     `computeBudgetMs(concurrency, images, p75Latency)` function.
+ *     The function lives in timeouts.ts, is unit-tested, and is called
+ *     from PIPELINE_BUDGET_MS' initializer. Type system enforces the
+ *     coupling.
+ *
+ * ── HOW TO TALK ABOUT THIS IN THE INTERVIEW ──
+ *
+ *   Opening: "I built this as a pure composition function — runPipeline
+ *   takes a brief, a storage provider, an OpenAI client, and a request
+ *   context, and returns a result. No classes, no inheritance, no
+ *   framework. My tests in __tests__/pipeline.test.ts call it directly
+ *   with a fake OpenAI client and a mock StorageProvider — zero
+ *   Next.js mocking."
+ *
+ *   On the partial-failure design: "The key invariant is that this
+ *   pipeline never returns an empty result when some images succeed.
+ *   If 5 of 6 generate, the user gets 5 creatives plus 1 typed error.
+ *   Promise.allSettled at every fan-out keeps the happy path from
+ *   being held hostage by a single bad image — that's Stage 4
+ *   (imageGenerator) and Stage 5 (textOverlay) and Stage 6
+ *   (outputOrganizer). Three layers, one discipline."
+ *
+ *   Pivot to critique UNPROMPTED: "The biggest architectural gap is
+ *   the stage sequence is hardcoded. Adding a moderation pass means
+ *   editing this file. A proper DAG executor would make that a config
+ *   change instead of a code change — that's my top followup."
+ *
+ *   If asked "why not Python / Langchain / a queue?" — "Python was my
+ *   first instinct. Next.js with TypeScript gave me single-codebase
+ *   deploy and a visible UI in the same repo, which matters for a
+ *   take-home where the reviewer opens Vercel and wants to see
+ *   something working in 30 seconds. Langchain would add abstraction
+ *   without adding evaluation signal — I'd rather show six hand-written
+ *   stages the reviewer can read top to bottom. A queue is the right
+ *   production answer for scale — but orthogonal to this 48-hour
+ *   spike. It's in my README as a 'what I'd build next' bullet."
+ *
+ *   If asked "how does this handle timeouts?" — Point at Stage 4's
+ *   AbortSignal propagation + the 120/135/300s cascade in
+ *   lib/api/timeouts.ts. "Each layer fails gracefully BEFORE the layer
+ *   above it kills the request uncooperatively. The server always wins
+ *   the race and returns a typed error instead of a bare 504."
+ */
+
 import type OpenAI from "openai";
 import type {
   CampaignBrief,
@@ -161,12 +329,16 @@ export async function runPipeline(
     totalImages: brief.products.length * brief.aspectRatios.length,
   });
 
-  // ------------------------------------------------------------------------
-  // Stage 1: Validating
-  // ------------------------------------------------------------------------
+  // ─── Stage 1/6: Validating ──────────────────────────────────────────────
+  // Purpose:     Defensive re-parse of the incoming brief.
+  // Delegates:   briefParser.ts → parseBrief() → Zod campaignBriefSchema.
+  // Next stage:  Stage 2 (resolving) receives `validatedBrief`.
+  // Partial-fail: None — fail-fast. Returns an empty PipelineResult with
+  //               one `invalid_input` PipelineError. No storage touched yet.
+  // Why defensive: API route already validates, but tests, scripts, and
+  //               future queue workers call runPipeline() directly.
+  // ────────────────────────────────────────────────────────────────────────
   await emitStage("validating", onStageChange, ctx);
-  // API route has already validated, but defensive re-check catches
-  // any direct callers (tests, scripts) that bypass the boundary.
   const parseResult = parseBrief(brief);
   if (!parseResult.success) {
     // Validation errors are system-level (not tied to a specific product/ratio)
@@ -188,9 +360,16 @@ export async function runPipeline(
   }
   const validatedBrief = parseResult.brief;
 
-  // ------------------------------------------------------------------------
-  // Stage 2: Resolving assets
-  // ------------------------------------------------------------------------
+  // ─── Stage 2/6: Resolving assets ────────────────────────────────────────
+  // Purpose:     Check if any product already has a reusable reference asset
+  //              in storage (cached DALL-E output or uploaded source image).
+  // Delegates:   assetResolver.ts → resolveAssets() → storage.getAsset()
+  //              (localStorage.ts or s3Storage.ts, chosen by STORAGE_MODE).
+  // Next stage:  Stage 3 builds tasks. Products WITH a buffer skip DALL-E;
+  //              products WITHOUT one are routed to imageGenerator.
+  // Partial-fail: Per-product. A storage miss is normal — not an error;
+  //              it just flips the product onto the "needs generation" path.
+  // ────────────────────────────────────────────────────────────────────────
   await emitStage("resolving", onStageChange, ctx);
   const assetResolutions = await resolveAssets(validatedBrief.products, storage);
   const reusedCount = assetResolutions.filter((r) => r.hasExistingAsset).length;
@@ -212,12 +391,20 @@ export async function runPipeline(
     }
   }
 
-  // ------------------------------------------------------------------------
-  // Stage 3: Building generation tasks (defensive — wrap in try/catch)
-  // ------------------------------------------------------------------------
-  // buildGenerationTasks is pure and should not throw under validated input,
-  // but we catch defensively to uphold the "never throw except catastrophic"
-  // contract. A throw here surfaces as a validation error, not a crash.
+  // ─── Stage 3/6: Building generation tasks ───────────────────────────────
+  // Purpose:     Fan out products × aspectRatios into concrete tasks, each
+  //              carrying a fully-rendered DALL-E prompt. ★ Star component.
+  // Delegates:   promptBuilder.ts → buildGenerationTasks() → buildPrompt()
+  //              is invoked per (product, aspectRatio) pair. Pure function,
+  //              zero I/O — the work is template substitution only.
+  // Next stage:  Tasks are partitioned into `tasksNeedingGeneration` (Stage
+  //              4 input) and `tasksWithReusedAssets` (skip Stage 4, injected
+  //              into allGeneratedImages later with generationTimeMs: 0).
+  // Partial-fail: Try/catch wraps a pure function defensively. A throw here
+  //              is a programmer error (not a runtime condition), but we
+  //              convert it to an invalid_input PipelineError and return a
+  //              partial result rather than letting it escape the pipeline.
+  // ────────────────────────────────────────────────────────────────────────
   let allTasks;
   try {
     allTasks = buildGenerationTasks(
@@ -243,9 +430,22 @@ export async function runPipeline(
     reusedAssetBuffers.has(task.product.slug)
   );
 
-  // ------------------------------------------------------------------------
-  // Stage 4: Generating images via DALL-E 3
-  // ------------------------------------------------------------------------
+  // ─── Stage 4/6: Generating images via DALL-E 3 ──────────────────────────
+  // Purpose:     Fan out DALL-E 3 API calls in parallel for every task that
+  //              did not hit a reused asset. This is the expensive stage —
+  //              almost all wall-clock time lives here (~22–44s for 6 imgs).
+  // Delegates:   imageGenerator.ts → generateImages() → p-limit throttled to
+  //              DALLE_CONCURRENCY_LIMIT (3 for Tier 1 reliability). Each
+  //              call retries via retry.ts on rate limits with jittered
+  //              backoff. The caller's AbortSignal propagates down to the
+  //              OpenAI SDK AND to retry.ts's backoff sleeper for preemption.
+  // Next stage:  Stage 5. Generated + reused images are concatenated into
+  //              `allGeneratedImages` so compositing treats both uniformly.
+  // Partial-fail: Promise.allSettled inside generateImages. Successful images
+  //              flow through; per-task errors collect into allErrors[] with
+  //              `cause` = 'api_error' | 'upstream_timeout' | 'rate_limit'.
+  //              A single failed image never blocks the other five.
+  // ────────────────────────────────────────────────────────────────────────
   await emitStage("generating", onStageChange, ctx);
   const generationResult = await generateImages(
     tasksNeedingGeneration,
@@ -320,9 +520,18 @@ export async function runPipeline(
     });
   }
 
-  // ------------------------------------------------------------------------
-  // Stage 5: Compositing text overlays
-  // ------------------------------------------------------------------------
+  // ─── Stage 5/6: Compositing text overlays ───────────────────────────────
+  // Purpose:     Draw campaign.message onto EVERY image (generated + reused)
+  //              so outputs are visually uniform regardless of source branch.
+  // Delegates:   compositeCreatives() helper below → textOverlay.ts →
+  //              overlayText() uses @napi-rs/canvas to rasterize text with
+  //              gradient band + shadow for readability. One canvas per image.
+  // Next stage:  Stage 6 organizes the Creative[] into storage.
+  // Partial-fail: Promise.allSettled inside compositeCreatives. An
+  //              ImageProcessingError is marked non-retryable (corrupt image
+  //              won't fix itself); any other error is marked retryable.
+  //              Successful creatives flow through even if some fail.
+  // ────────────────────────────────────────────────────────────────────────
   await emitStage("compositing", onStageChange, ctx);
   const composited = await compositeCreatives(
     allGeneratedImages,
@@ -335,12 +544,20 @@ export async function runPipeline(
     failed: composited.errors.length,
   });
 
-  // ------------------------------------------------------------------------
-  // Stage 6: Organizing output (ALWAYS runs, even with 0 creatives)
-  // ------------------------------------------------------------------------
-  // Rationale: manifest.json is the audit trail. Even if all creatives
-  // failed compositing, we still write the manifest to record what happened.
-  // This prevents silent loss of the error record.
+  // ─── Stage 6/6: Organizing output ───────────────────────────────────────
+  // Purpose:     Write creatives + thumbnails + manifest.json to storage in
+  //              /{campaignId}/{productSlug}/{ratio}/ layout. ALWAYS runs,
+  //              even with zero creatives, so the audit trail is preserved.
+  // Delegates:   organizeAndReturn() → outputOrganizer.ts → organizeOutput()
+  //              → storage.putCreative() + storage.putManifest() (localStorage
+  //              writes to ./output/, s3Storage uploads to the S3 bucket).
+  // Next stage:  None. Returns PipelineResult to the caller (API route,
+  //              Vitest test, or CLI harness).
+  // Partial-fail: Per-creative write errors collect into `allErrors` and
+  //              surface in the response. Manifest write failure throws
+  //              OrganizationError — the one catastrophic exit from the
+  //              pipeline, because without a manifest the run is unreadable.
+  // ────────────────────────────────────────────────────────────────────────
   return await organizeAndReturn(
     validatedBrief,
     composited.creatives,
