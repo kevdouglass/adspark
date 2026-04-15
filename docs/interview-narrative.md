@@ -20,7 +20,7 @@
 > *"Hi, I'm Kevin. I'm going to walk you through AdSpark — a creative
 > automation pipeline I built for the take-home. It takes a campaign
 > brief in JSON and produces publish-ready ad creatives across the
-> three social aspect ratios in about 30 to 45 seconds.*
+> three social aspect ratios in about 30 seconds.*
 >
 > *The interesting parts for me were the prompt builder — which Adobe's
 > brief specifically called out as the scrutiny point — the clean
@@ -100,6 +100,15 @@ stated 15:44 PDT deadline and the `docs(submission):` commit at Monday
    a prior pipeline run showing the full output structure"
 
 ### The click path (3–4 minutes, start-to-finish)
+
+**⭐ Demo path choice — lead with the STRUCTURED FORM, not natural language.**
+Verified 2026-04-14: structured-form with `coastal-sun-protection` runs
+in ~32 seconds and hits both the reuse and generation branches in a
+single run. The natural-language path adds ~25 seconds of orchestrator
+time AND produces a brief with `existingAsset: null` on every product
+(so it misses the reuse story entirely). If the reviewer wants to see
+the orchestrator specifically, do that as a SECOND demo after the
+structured-form run has already landed the visible-reuse beat.
 
 1. **Show the idle state.** "This is the dashboard. Empty on the left
    is the brief form; the right side hosts the progress UI, the
@@ -592,11 +601,21 @@ brand-safety reviewer would grep against."*
 ## 10. Three numbers to remember
 
 These are the specific, concrete numbers a senior interviewer may ask
-about. Have them memorized cold:
+about. Have them memorized cold. **Verified by live timing instrumentation
+on 2026-04-14** (see the Block F dry run + the natural-language end-to-end
+test captured at the bottom of this file).
 
-- **~45 seconds** — realistic wall-clock for a 2-product × 3-ratio brief on DALL-E 3 Tier 1
+- **~32 seconds** — realistic wall-clock for the structured-form demo path with the `coastal-sun-protection` brief (2 products × 3 ratios, 3 reused + 3 generated). Measured live. **This is the demo path you should lead with tomorrow.**
 - **~$0.50** — per-campaign API cost (6 DALL-E standard generations at ~$0.08 each, plus orchestrator overhead)
 - **~$50K–$500K over 4–8 weeks** — what a traditional creative agency would bill for the same output. This is the "why does this matter" number.
+
+### Additional timing numbers — have these ready if asked
+
+- **~24 seconds** — orchestrator wall time (4 agent phases: triage ~7s + draft ~7s in parallel, review ~10s, synthesis ~7s). **NOT the 10-12s the old BriefForm JSDoc claimed** — that figure was stale and not verified against the current code path. Live-measured 2026-04-14.
+- **~52 seconds** — natural-language path total (orchestrator + pipeline for a 1-product × 3-ratio refined brief). 25s orchestrator + 27s pipeline.
+- **~80-85 seconds** — worst-case natural-language path for a 2-product × 3-ratio refined brief (25s orchestrator + ~55-60s pipeline with 2 DALL-E waves).
+- **3 per wave** — DALL-E concurrency limit at Tier 1 (`DALLE_CONCURRENCY_LIMIT` in imageGenerator.ts). A 3-image brief fits in 1 wave; 6 images need 2 waves.
+- **~22-28 seconds** — per-image DALL-E 3 latency at Tier 1 p75. Three parallel calls take ~the longest-single-call time because they're all running concurrently.
 
 Plus these:
 
