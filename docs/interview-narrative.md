@@ -38,6 +38,49 @@ optimized for → the three things I'll show → an invitation to interrupt.
 
 ---
 
+## 0.1 Branch framing — three references on GitHub (optional opener)
+
+Only say this if a reviewer asks about the repo structure, or if you
+want to lead with engineering discipline before the product walkthrough.
+Drops to ~45 seconds after the primary opener. See
+`docs/branch-decision.html` for the full decision record.
+
+> *"Three references on GitHub that matter for this walkthrough. There's
+> a tag called `assessment-submission` pointing at commit `061f274` —
+> that's the exact bit-perfect state I submitted, complete with the Loom
+> walkthrough link and the demo scripts. `main` is that plus a cosmetic
+> text-overlay rendering fix I pushed this week — the campaign-message
+> band now gradients instead of flat-fills, and the glyphs have a subtle
+> drop shadow. And `feat/interview-prep` is where I've been building
+> post-submission feature work: the visible reuse story, the run summary
+> panel, the D3 timing chart, the manual upload UI, plus a SPIKE doc and
+> an INVESTIGATION for the upload work. I'm going to demo from
+> `feat/interview-prep` because the visible reuse story is the strongest
+> beat, but I can switch to any of the three — they're all the same
+> underlying pipeline."*
+
+**Three references, three distinct purposes:**
+
+| Reference | What it is | Use when reviewer asks |
+|---|---|---|
+| **`assessment-submission`** (tag) | Exact 061f274 commit | *"show me the pristine submission"* |
+| **`main`** (branch) | Submission + this week's overlay fix | *"show me current main"* |
+| **`feat/interview-prep`** (branch) | Submission + overlay fix + Blocks B/C/D + SPIKE-003 + this narrative + decision doc | *"show me your best version"* (default) |
+
+**If a reviewer pushes back on the 9-hour overtime window** between the
+stated 15:44 PDT deadline and the `docs(submission):` commit at Monday
+00:29 PDT:
+
+> *"I kept polishing after the stated deadline — mostly infrastructure
+> hardening, the Docker container, SPIKE-002 audit, and the Loom
+> walkthrough link that gets reviewers from the GitHub landing page to
+> the 2-minute video. The commit I labeled `docs(submission):` is where
+> I declared done. The tag makes that declaration permanent and
+> verifiable — if you check out `assessment-submission`, you get exactly
+> that state, byte for byte."*
+
+---
+
 ## 1. Live demo — the click path
 
 ### Before the call starts

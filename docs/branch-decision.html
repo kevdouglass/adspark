@@ -346,10 +346,11 @@
   <h2>TL;DR</h2>
   <p>
     <strong>Demo from <code>feat/interview-prep</code>.</strong>
-    Push it to <code>origin</code> tonight as a safety backup (separate from <code>main</code>),
-    check out <code>main</code> in a second git worktree as a fallback in case a strict reviewer
-    asks to see the submitted state verbatim, and open the call by briefly framing the branch choice
-    in your first 45 seconds.
+    Three references now live on GitHub, each with a distinct purpose:
+    <code>assessment-submission</code> (tag at commit <code>061f274</code>) is the bit-perfect
+    submission, <code>main</code> is that plus a cosmetic overlay-rendering fix pushed this week,
+    and <code>feat/interview-prep</code> is where post-submission feature work lives. Demo from
+    the latter, but know the first two are one checkout away if a reviewer asks.
   </p>
 </div>
 
@@ -358,8 +359,9 @@
   With less than 24 hours to the Adobe interview, which branch should be the primary demo target?
 </p>
 <ul>
-  <li><strong><code>origin/main</code></strong> — the pushed, submitted state. What Adobe has on their machine if they cloned the repo after submission. Contains the pipeline, the 8 ADRs, the Docker parity story, and the overlay fix pushed earlier today.</li>
-  <li><strong><code>feat/interview-prep</code></strong> — local-only branch with four commits on top of main: the visible reuse story (Block B), the sourceType plumbing + RunSummaryPanel + D3 timing chart (Blocks C+D), the SPIKE-003 manual upload flow (local mode), and the interview narrative cheat-sheet.</li>
+  <li><strong><code>origin/main</code></strong> — the pushed state. Contains the submitted commit plus a cosmetic text-overlay rendering fix pushed earlier this week (gradient band + drop-shadowed glyphs).</li>
+  <li><strong><code>feat/interview-prep</code></strong> — the enhanced branch with five commits on top of main: Block B (visible reuse story), Blocks C+D (sourceType plumbing + RunSummaryPanel + D3 timing chart), SPIKE-003 (manual upload flow, local mode), the interview narrative cheat-sheet, and this decision record.</li>
+  <li><strong><code>assessment-submission</code></strong> — a lightweight annotated tag pointing at the exact bit-perfect submission commit <code>061f274</code> (authored Monday 2026-04-13 00:29 PDT, whose message literally starts with <code>docs(submission):</code>). Lets a strict reviewer check out exactly what you submitted without any post-submission improvements.</li>
 </ul>
 
 <h2>Side-by-side comparison</h2>
@@ -465,6 +467,62 @@
   This <strong>does not affect <code>main</code></strong>. It creates a new remote branch <code>origin/feat/interview-prep</code> that is visible in the GitHub branch list but does not touch what Adobe cloned. Your interview-prep work is now backed up to a second machine (GitHub's) for zero additional risk.
 </p>
 
+<h2>The third reference: <code>assessment-submission</code> tag</h2>
+<p>
+  Between writing this decision record and finalizing it, one more piece of
+  the story fell into place. The <code>main</code> branch has the
+  submission commit plus a cosmetic text-overlay fix pushed this week —
+  which is 99.9% of the submitted state but not byte-perfect. A strict
+  reviewer who asks <em>"show me exactly what you submitted"</em> and then
+  runs <code>git log</code> could notice the two extra commits and ask
+  about them. The honest answer is fine ("one cosmetic overlay fix, no
+  behavior change") but the conversation is cleaner if you have a
+  permanent reference to the exact submission commit.
+</p>
+<pre><code>git tag -a assessment-submission 061f274 -m "Exact state at Adobe FDE assessment submission — Loom walkthrough + demo scripts landed"
+git push origin assessment-submission</code></pre>
+<p>
+  Now there are <strong>three distinct references</strong>, each with a
+  crisp single-purpose description:
+</p>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Reference</th>
+        <th>What it is</th>
+        <th>Use when reviewer asks…</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>assessment-submission</code> <span class="partial">(tag)</span></td>
+        <td>Exact <code>061f274</code> commit — bit-perfect submission</td>
+        <td><em>"show me the pristine submission"</em></td>
+      </tr>
+      <tr>
+        <td><code>main</code> <span class="partial">(branch)</span></td>
+        <td>Submission + overlay rendering fix</td>
+        <td><em>"show me current main"</em></td>
+      </tr>
+      <tr>
+        <td><code>feat/interview-prep</code> <span class="yes">(branch — demo target)</span></td>
+        <td>Submission + overlay + Blocks B/C/D + SPIKE-003 + docs</td>
+        <td><em>"show me your best version"</em> (default)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p>
+  The tag also <strong>proactively frames the 9-hour overtime window</strong>
+  between the stated 15:44 PDT deadline and the <code>docs(submission):</code>
+  commit at Monday 00:29 PDT. If asked: <em>"I kept polishing after the
+  stated deadline — mostly infrastructure hardening, the Docker container,
+  SPIKE-002, and the Loom walkthrough link. The commit I labeled
+  <code>docs(submission):</code> is where I declared done. The tag makes
+  that declaration permanent and verifiable."</em>
+</p>
+
 <h2>Framing to use on the call</h2>
 <p>
   Pick whichever flavor fits the conversation flow. The first one leads with the branch choice confidently; the second is what to say if a reviewer asks about it mid-call.
@@ -473,7 +531,7 @@
 <h3>Opener — lead with it (confident, proactive)</h3>
 <blockquote>
   <p>
-    "Quick orientation before I share my screen: I submitted the assessment on Sunday with the 48-hour deadline, and I've continued to iterate on the branch I'm about to show you. My submitted state on <code>main</code> has everything in the Adobe brief — the pipeline, the prompt builder, the 8 ADRs, the Docker parity story. My <code>feat/interview-prep</code> branch adds three things I wanted to get right post-submission: the reuse path is now visible end-to-end instead of architecturally-supported-but-invisible, I built the manual upload UI the assignment text calls for, and I wrote a SPIKE doc and an INVESTIGATION for the work. I'm going to demo from <code>feat/interview-prep</code> because the visible reuse story is the strongest beat, but if you'd prefer to see the submitted state verbatim I can switch to <code>main</code> anytime — they're the same underlying pipeline."
+    "Three references on GitHub that matter for this walkthrough. There's a tag called <code>assessment-submission</code> pointing at commit <code>061f274</code> — that's the exact bit-perfect state I submitted, complete with the Loom walkthrough link and the demo scripts. <code>main</code> is that plus a cosmetic text-overlay rendering fix I pushed this week — the campaign-message band now gradients instead of flat-fills, and the glyphs have a subtle drop shadow. And <code>feat/interview-prep</code> is where I've been building post-submission feature work: the visible reuse story, the run summary panel, the D3 timing chart, the manual upload UI, plus a SPIKE doc and an INVESTIGATION for the upload work. I'm going to demo from <code>feat/interview-prep</code> because the visible reuse story is the strongest beat, but I can switch to any of the three — they're all the same underlying pipeline."
   </p>
 </blockquote>
 <p>
@@ -525,16 +583,16 @@ npm run dev -- --port 3001</code></pre>
 <div class="callout good">
   <h3>Action items tonight</h3>
   <p>
-    <strong>1.</strong> Push <code>feat/interview-prep</code> to <code>origin</code> as a backup (<code>git push -u origin feat/interview-prep</code>). One command, zero cost, non-destructive. This is the single most important risk reduction step.
+    <strong>1. ✅ Done.</strong> <code>feat/interview-prep</code> pushed to <code>origin</code> as backup. 8+ hours of work now replicated to GitHub, zero disk-loss risk.
   </p>
   <p>
-    <strong>2.</strong> Set up a second git worktree with <code>main</code> running on port 3001 as a fallback in case a reviewer asks for the submitted state verbatim.
+    <strong>2. ✅ Done.</strong> <code>assessment-submission</code> tag created at commit <code>061f274</code> and pushed to origin. Strict reviewers can now check out the exact bit-perfect submission if asked.
   </p>
   <p>
-    <strong>3.</strong> Read <code>docs/interview-narrative.md</code> end-to-end once (~15 minutes). Absorb the structure, memorize §0 opening beats and §10 "three numbers to remember cold."
+    <strong>3.</strong> Read <code>docs/interview-narrative.md</code> end-to-end once (~15 minutes). Absorb the structure, memorize §0 opening beats and §10 "three numbers to remember cold." The updated §0.1 section has the three-reference framing as its own scripted opener.
   </p>
   <p>
-    <strong>4.</strong> Run the demo click path live at least once (Block F dry run). Use <code>coastal-sun-protection</code> as the primary sample brief.
+    <strong>4.</strong> Run the demo click path live at least once (Block F dry run). Use <code>coastal-sun-protection</code> as the primary sample brief — one product reuses a committed seed asset, the other goes through DALL-E, both branches fire in a single run and the reuse story becomes visible through the badge, the summary panel, and the timing chart.
   </p>
   <p>
     <strong>5.</strong> Sleep. The hard work is already done. Your only job tomorrow is to explain what's already in front of you, honestly, without overselling or underselling.
