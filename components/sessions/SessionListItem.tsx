@@ -1,19 +1,12 @@
 "use client";
 
 import { SessionListItemViewModel } from "./types";
+import { SESSION_STATUS_CLASSES } from "./statusStyles";
 
 type SessionListItemProps = {
   session: SessionListItemViewModel;
   isSelected: boolean;
   onClick: () => void;
-};
-
-const statusClasses: Record<SessionListItemViewModel["status"], string> = {
-  draft: "bg-zinc-100 text-zinc-700",
-  ready: "bg-blue-50 text-blue-700",
-  generating: "bg-amber-50 text-amber-700",
-  completed: "bg-emerald-50 text-emerald-700",
-  failed: "bg-rose-50 text-rose-700",
 };
 
 export function SessionListItem({
@@ -25,6 +18,7 @@ export function SessionListItem({
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={isSelected}
       className={[
         "w-full rounded-xl border p-3 text-left transition",
         isSelected
@@ -43,7 +37,7 @@ export function SessionListItem({
         <span
           className={[
             "shrink-0 rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-wide",
-            statusClasses[session.status],
+            SESSION_STATUS_CLASSES[session.status],
           ].join(" ")}
         >
           {session.status}

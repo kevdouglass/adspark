@@ -37,8 +37,14 @@ export function useSessionDetail(sessionId: string | null): UseSessionDetailResu
 
   const updateBrief = useCallback(async (brief: CampaignBriefDto) => {
     if (!sessionId) return;
-    await sessionsClient.updateBrief(sessionId, brief);
-    await refresh();
+    setError(undefined);
+    try {
+      await sessionsClient.updateBrief(sessionId, brief);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update brief");
+      throw err;
+    }
   }, [refresh, sessionId]);
 
   useEffect(() => {

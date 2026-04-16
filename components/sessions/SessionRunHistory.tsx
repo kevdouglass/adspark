@@ -29,6 +29,7 @@ export function SessionRunHistory({
               key={run.id}
               type="button"
               onClick={() => onSelectRun?.(run.id)}
+              aria-pressed={isSelected}
               className={[
                 "flex w-full items-center justify-between rounded-xl border px-3 py-3 text-left",
                 isSelected

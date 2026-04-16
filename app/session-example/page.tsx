@@ -61,10 +61,7 @@ export default function SessionExamplePage() {
           <div className="flex flex-col gap-6">
             <SessionHeader
               session={headerVm}
-              onGenerate={() => {
-                // Replace with your session-aware generate handler.
-                console.log("Generate for session", session.id);
-              }}
+              onGenerate={() => undefined}
             />
 
             {runs.length === 0 ? (

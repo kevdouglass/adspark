@@ -74,6 +74,19 @@ describe("SessionHeader", () => {
     expect(onGenerate).toHaveBeenCalledTimes(1);
   });
 
+  it("renders the Generate button even when status is generating", () => {
+    render(
+      <SessionHeader
+        session={{ ...baseSession, status: "generating" }}
+        onGenerate={() => {}}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /generate creatives/i })
+    ).toBeInTheDocument();
+  });
+
   it.each([
     ["draft"],
     ["ready"],

@@ -144,6 +144,12 @@ describe("sessionsClient.list", () => {
       "Request failed with 500"
     );
   });
+
+  it("propagates network-level fetch rejection", async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await expect(sessionsClient.list()).rejects.toThrow("Failed to fetch");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -270,6 +276,14 @@ describe("sessionsClient.listRuns", () => {
     const result = await sessionsClient.listRuns("sess_1");
 
     expect(result).toEqual([]);
+  });
+
+  it("throws when the server returns non-2xx", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse("Session not found", 404));
+
+    await expect(sessionsClient.listRuns("missing")).rejects.toThrow(
+      "Session not found"
+    );
   });
 });
 

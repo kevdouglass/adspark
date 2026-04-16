@@ -1,18 +1,11 @@
 "use client";
 
 import { SessionHeaderViewModel } from "./types";
+import { SESSION_STATUS_CLASSES } from "./statusStyles";
 
 type SessionHeaderProps = {
   session: SessionHeaderViewModel;
   onGenerate?: () => void;
-};
-
-const statusClasses: Record<SessionHeaderViewModel["status"], string> = {
-  draft: "bg-zinc-100 text-zinc-700",
-  ready: "bg-blue-50 text-blue-700",
-  generating: "bg-amber-50 text-amber-700",
-  completed: "bg-emerald-50 text-emerald-700",
-  failed: "bg-rose-50 text-rose-700",
 };
 
 export function SessionHeader({ session, onGenerate }: SessionHeaderProps) {
@@ -25,7 +18,7 @@ export function SessionHeader({ session, onGenerate }: SessionHeaderProps) {
             <span
               className={[
                 "rounded-full px-2.5 py-1 text-xs font-medium uppercase tracking-wide",
-                statusClasses[session.status],
+                SESSION_STATUS_CLASSES[session.status],
               ].join(" ")}
             >
               {session.status}

@@ -1,3 +1,5 @@
+export type DtoAspectRatio = "1:1" | "9:16" | "16:9";
+
 export type CampaignBriefDto = {
   campaign: {
     id: string;
@@ -17,10 +19,12 @@ export type CampaignBriefDto = {
     color?: string;
     existingAsset?: string | null;
   }>;
-  aspectRatios: string[];
+  aspectRatios: DtoAspectRatio[];
 };
 
 export type SessionStatus = "draft" | "ready" | "generating" | "completed" | "failed";
+
+export type RunStatus = "queued" | "running" | "completed" | "failed";
 
 export type CampaignSessionDto = {
   id: string;
@@ -37,7 +41,7 @@ export type GenerationRunDto = {
   id: string;
   sessionId: string;
   createdAt: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: RunStatus;
   totalImages?: number;
   totalTimeMs?: number;
   outputs?: Array<{
@@ -45,7 +49,7 @@ export type GenerationRunDto = {
     creativeUrl?: string;
     thumbnailUrl?: string;
     productName: string;
-    aspectRatio: string;
+    aspectRatio: DtoAspectRatio;
   }>;
 };
 

@@ -33,8 +33,7 @@ describe("SessionRunHistory", () => {
       <SessionRunHistory runs={[]} selectedRunId={null} />
     );
 
-    // Component returns null — no section element rendered.
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders the 'Previous runs' heading when runs are present", () => {
@@ -98,10 +97,34 @@ describe("SessionRunHistory", () => {
     expect(screen.getByText("Apr 15, 3:42 PM")).toBeInTheDocument();
   });
 
-  it("renders the run status label", () => {
-    render(<SessionRunHistory runs={runs} selectedRunId={null} />);
+  it.each([["queued"], ["running"], ["completed"], ["failed"]] as const)(
+    "renders status label for status=%s",
+    (status) => {
+      render(
+        <SessionRunHistory
+          runs={[{ ...runs[0], status }]}
+          selectedRunId={null}
+        />
+      );
+      expect(screen.getByText(status)).toBeInTheDocument();
+    }
+  );
 
-    expect(screen.getByText("completed")).toBeInTheDocument();
-    expect(screen.getByText("failed")).toBeInTheDocument();
+  it("renders '0 creatives' when totalImages is undefined", () => {
+    render(
+      <SessionRunHistory
+        runs={[{ id: "run_x", createdAtLabel: "Apr 15", status: "queued" }]}
+        selectedRunId={null}
+      />
+    );
+    expect(screen.getByText(/0 creatives/)).toBeInTheDocument();
+  });
+
+  it("exposes aria-pressed on selected run button", () => {
+    render(<SessionRunHistory runs={runs} selectedRunId="run_1" />);
+
+    const buttons = screen.getAllByRole("button");
+    expect(buttons[0]).toHaveAttribute("aria-pressed", "true");
+    expect(buttons[1]).toHaveAttribute("aria-pressed", "false");
   });
 });

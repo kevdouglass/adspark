@@ -22,7 +22,7 @@ export function SessionSidebar({
   isLoading,
 }: SessionSidebarProps) {
   return (
-    <aside className="flex h-full w-full max-w-md flex-col border-r border-zinc-200 bg-zinc-50">
+    <aside className="flex h-full w-full flex-col border-r border-zinc-200 bg-zinc-50">
       <div className="border-b border-zinc-200 p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -39,7 +39,7 @@ export function SessionSidebar({
             onClick={onCreateSession}
             className="rounded-xl bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800"
           >
-            + New campaign
+            <span aria-hidden="true">+ </span>New campaign
           </button>
         </div>
       </div>

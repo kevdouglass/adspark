@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { sessionsClient } from "@/lib/api/sessions/client";
-import { CampaignBriefDto } from "@/lib/api/sessions/dtos";
-import { SessionListItemViewModel } from "@/components/sessions/types";
+import type { CampaignBriefDto, ListSessionsResponse } from "@/lib/api/sessions/dtos";
+
+type SessionListItem = ListSessionsResponse["sessions"][number];
 
 type CreateSessionInput = {
   title?: string;
@@ -11,7 +12,7 @@ type CreateSessionInput = {
 };
 
 type UseSessionsResult = {
-  sessions: SessionListItemViewModel[];
+  sessions: SessionListItem[];
   isLoading: boolean;
   error?: string;
   refresh: () => Promise<void>;
@@ -19,7 +20,7 @@ type UseSessionsResult = {
 };
 
 export function useSessions(): UseSessionsResult {
-  const [sessions, setSessions] = useState<SessionListItemViewModel[]>([]);
+  const [sessions, setSessions] = useState<SessionListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>();
 
@@ -37,9 +38,15 @@ export function useSessions(): UseSessionsResult {
   }, []);
 
   const createSession = useCallback(async (input?: CreateSessionInput) => {
-    const session = await sessionsClient.create(input ?? {});
-    await refresh();
-    return session.id;
+    setError(undefined);
+    try {
+      const session = await sessionsClient.create(input ?? {});
+      await refresh();
+      return session.id;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create session");
+      throw err;
+    }
   }, [refresh]);
 
   useEffect(() => {

@@ -1,4 +1,5 @@
-export type SessionStatus = "draft" | "ready" | "generating" | "completed" | "failed";
+import type { SessionStatus, RunStatus } from "@/lib/api/sessions/dtos";
+export type { SessionStatus, RunStatus };
 
 export type SessionListItemViewModel = {
   id: string;
@@ -11,7 +12,7 @@ export type SessionListItemViewModel = {
 export type SessionRunListItemViewModel = {
   id: string;
   createdAtLabel: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: RunStatus;
   totalImages?: number;
   totalTimeMs?: number;
 };

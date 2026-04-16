@@ -1,8 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 const STORAGE_KEY = "adspark.selectedSessionId";
+
+function readStoredSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
 
 type UseSessionSelectionResult = {
   selectedSessionId: string | null;
@@ -11,23 +20,22 @@ type UseSessionSelectionResult = {
 };
 
 export function useSessionSelection(): UseSessionSelectionResult {
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      setSelectedSessionId(saved);
-    }
-  }, []);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    readStoredSessionId
+  );
 
   const selectSession = useCallback((id: string) => {
     setSelectedSessionId(id);
-    window.localStorage.setItem(STORAGE_KEY, id);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEY, id);
+    }
   }, []);
 
   const clearSelection = useCallback(() => {
     setSelectedSessionId(null);
-    window.localStorage.removeItem(STORAGE_KEY);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(STORAGE_KEY);
+    }
   }, []);
 
   return { selectedSessionId, selectSession, clearSelection };

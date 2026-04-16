@@ -81,9 +81,8 @@ describe("SessionListItem", () => {
       />
     );
 
-    // Selection state is communicated via CSS classes (no aria-pressed on
-    // the current implementation — see future a11y improvement note).
     expect(screen.getByRole("button")).toHaveClass("bg-blue-50");
+    expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "true");
   });
 
   it("applies unselected styling when isSelected=false", () => {
@@ -97,6 +96,7 @@ describe("SessionListItem", () => {
 
     expect(screen.getByRole("button")).not.toHaveClass("bg-blue-50");
     expect(screen.getByRole("button")).toHaveClass("bg-white");
+    expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "false");
   });
 
   it.each([
