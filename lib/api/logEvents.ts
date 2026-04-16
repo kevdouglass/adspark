@@ -76,6 +76,15 @@ export const LogEvents = {
   // ---- AbortController fired by pipeline budget timeout ----
   PipelineBudgetAbort: "pipeline.budget.abort",
 
+  // ---- Session lifecycle ----
+  SessionCreate: "session.create",
+  SessionGet: "session.get",
+  SessionList: "session.list",
+  SessionBriefUpdate: "session.brief.update",
+  SessionGenerate: "session.generate.start",
+  SessionGenerateComplete: "session.generate.complete",
+  SessionGenerateFailed: "session.generate.failed",
+
   // ---- Graceful shutdown signal received ----
   ShutdownSignal: "shutdown.signal",
 } as const;

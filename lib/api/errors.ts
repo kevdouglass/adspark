@@ -54,6 +54,8 @@ export type ApiErrorCode =
   // 404s through the 500-class INTERNAL_ERROR bucket (which triggers
   // retries, Sentry alerts, etc.).
   | "NOT_FOUND"
+  // 409-class: conflict (server-originated)
+  | "SESSION_CONFLICT"
   // 500-class: server errors (server-originated)
   | "MISSING_CONFIGURATION"
   | "UPSTREAM_ERROR"
@@ -92,6 +94,7 @@ export const KNOWN_API_ERROR_CODES: ReadonlySet<ApiErrorCode> = new Set<ApiError
   "REQUEST_TOO_LARGE",
   "CONTENT_POLICY_VIOLATION",
   "NOT_FOUND",
+  "SESSION_CONFLICT",
   "MISSING_CONFIGURATION",
   "UPSTREAM_ERROR",
   "UPSTREAM_RATE_LIMITED",
