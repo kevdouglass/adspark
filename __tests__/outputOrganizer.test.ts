@@ -97,6 +97,7 @@ async function createCreative(
     imageBuffer,
     generationTimeMs: 14200,
     compositingTimeMs: 480,
+    sourceType: "generated",
   };
 }
 
@@ -393,6 +394,7 @@ describe("organizeOutput", () => {
       imageBuffer: Buffer.from("this is not a png"),
       generationTimeMs: 100,
       compositingTimeMs: 50,
+      sourceType: "generated",
     };
 
     const result = await organizeOutput(

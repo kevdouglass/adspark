@@ -226,6 +226,32 @@ export class MissingConfigurationError extends Error {
   }
 }
 
+/**
+ * Validate env vars required specifically for the upload flow.
+ *
+ * Scoped separately from `validateRequiredEnv()` because the upload
+ * route does NOT need `OPENAI_API_KEY` — upload never calls OpenAI.
+ * Both helpers live in the same module so grep `validate.*Env` finds
+ * the full surface.
+ *
+ * Called from `app/api/upload/route.ts` at request entry. Throws
+ * `MissingConfigurationError` for the route to catch and map to a 500
+ * `MISSING_CONFIGURATION` response.
+ *
+ * See SPIKE-003 §Decision D1 and INVESTIGATION-003 §Adjustment 4.
+ */
+export function validateUploadEnv(): void {
+  const missing: string[] = [];
+  if (getStorageMode() === "s3" && !process.env.S3_BUCKET) {
+    missing.push("S3_BUCKET (required when STORAGE_MODE=s3)");
+  }
+  if (missing.length > 0) {
+    throw new MissingConfigurationError(
+      `Upload flow missing required env vars: ${missing.join(", ")}`
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Health + shutdown — container platform operations surface
 // ---------------------------------------------------------------------------

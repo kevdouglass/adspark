@@ -275,6 +275,43 @@ describe("runPipeline", () => {
       (p: { slug: string }) => p.slug === "spf-50-sunscreen"
     );
     expect(spfProduct.creatives[0].generationTimeMs).toBe(0);
+
+    // sourceType propagation: the reused product's creatives should all
+    // carry sourceType "reused"; the generated product's should all carry
+    // sourceType "generated". This is the assertion that gates the
+    // assignment's visible-reuse requirement — without it, the UI badge
+    // and the run summary have no truth to render.
+    expect(spfProduct.creatives.every(
+      (c: { sourceType: string }) => c.sourceType === "reused"
+    )).toBe(true);
+    const aloeProduct = manifest.products.find(
+      (p: { slug: string }) => p.slug === "aloe-gel"
+    );
+    expect(aloeProduct.creatives.every(
+      (c: { sourceType: string }) => c.sourceType === "generated"
+    )).toBe(true);
+
+    // Manifest summary block should reflect the mix: 6 creatives total,
+    // 3 reused + 3 generated, 0 failed, status "complete".
+    expect(manifest.summary).toMatchObject({
+      totalProducts: 2,
+      totalCreatives: 6,
+      reusedAssets: 3,
+      generatedAssets: 3,
+      failedCreatives: 0,
+      status: "complete",
+    });
+
+    // The top-level PipelineResult.creatives should also carry sourceType
+    // (belt-and-braces check — the manifest reads from this array).
+    const reusedCount = result.creatives.filter(
+      (c) => c.sourceType === "reused"
+    ).length;
+    const generatedCount = result.creatives.filter(
+      (c) => c.sourceType === "generated"
+    ).length;
+    expect(reusedCount).toBe(3);
+    expect(generatedCount).toBe(3);
   });
 
   it("invokes onStageChange callback for each pipeline stage", async () => {

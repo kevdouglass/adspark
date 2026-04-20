@@ -39,7 +39,39 @@ const productSchema = z.object({
   category: z.string().min(1, "Product category is required"),
   keyFeatures: z.array(z.string()).min(1, "At least one key feature required"),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, "Color must be a valid hex color (e.g. #F4A261)"),
-  existingAsset: z.string().nullable(),
+  /**
+   * Asset library key — see `assetResolver.resolveOne`.
+   *
+   * The tighter constraints below (SPIKE-003 Adjustment 6) are a
+   * two-layer defense:
+   *
+   * 1. **Syntactic** — this Zod schema rejects empty strings, path-
+   *    traversal segments, absolute paths, backslashes, and anything
+   *    longer than 256 chars at the validation boundary. Clients get a
+   *    400 with a clear message.
+   * 2. **Semantic** — `LocalStorage.safePath` catches traversal
+   *    attempts at the filesystem boundary too, so even if the Zod
+   *    schema is bypassed (e.g. a test harness calling the resolver
+   *    directly) the write can't escape `baseDir`.
+   *
+   * The regex allows the full character set the upload route's
+   * `buildAssetKey` function produces (lowercase alnum, dots, dashes,
+   * underscores, forward slashes) plus what the seed-asset filenames
+   * use (e.g. `spf-50-sunscreen.webp`).
+   */
+  existingAsset: z
+    .string()
+    .min(1, "existingAsset must be a non-empty string (use null for no asset)")
+    .max(256, "existingAsset key must be ≤ 256 characters")
+    .regex(
+      /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/,
+      "existingAsset must be a relative storage key — no leading slash, no dotfiles, no spaces"
+    )
+    .refine(
+      (k) => !k.includes("..") && !k.includes("\\"),
+      "existingAsset must not contain path-traversal segments or backslashes"
+    )
+    .nullable(),
 });
 
 const aspectRatioSchema = z.enum(["1:1", "9:16", "16:9"]);

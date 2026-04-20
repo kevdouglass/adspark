@@ -1,0 +1,36 @@
+{
+  "campaign": {
+    "id": "coastal-sun-protection-summer-2026",
+    "name": "Coastal Sun Protection — Summer 2026",
+    "message": "Stay Protected All Summer",
+    "targetRegion": "North America",
+    "targetAudience": "Health-conscious adults 25-45, outdoor enthusiasts, beach and boardwalk lifestyle",
+    "tone": "warm, coastal, trustworthy, premium but approachable",
+    "season": "summer"
+  },
+  "products": [
+    {
+      "name": "SPF 50 Mineral Sunscreen",
+      "slug": "spf-50-sunscreen",
+      "description": "Reef-safe mineral sunscreen with zinc oxide, broad spectrum SPF 50, water-resistant 80 minutes",
+      "category": "sun protection",
+      "keyFeatures": ["reef-safe", "mineral formula", "water-resistant", "broad spectrum"],
+      "color": "#F4A261",
+      "existingAsset": "spf-50-sunscreen.webp"
+    },
+    {
+      "name": "After-Sun Cooling Aloe Gel",
+      "slug": "after-sun-aloe-gel",
+      "description": "Organic aloe vera gel with vitamin E and cucumber extract for post-sun skin recovery",
+      "category": "after-sun care",
+      "keyFeatures": ["organic aloe vera", "vitamin E", "cooling formula", "fragrance-free"],
+      "color": "#2A9D8F",
+      "existingAsset": null
+    }
+  ],
+  "aspectRatios": ["1:1", "9:16", "16:9"],
+  "outputFormats": {
+    "creative": "png",
+    "thumbnail": "webp"
+  }
+}

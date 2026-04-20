@@ -33,10 +33,12 @@ import type {
   CampaignBrief,
   Creative,
   CreativeOutput,
+  CreativeSourceType,
   PipelineError,
   StorageProvider,
 } from "./types";
 import { ASPECT_RATIO_FOLDER } from "./types";
+import { computeRunSummary, type RunSummary } from "./runSummary";
 import type { RequestContext } from "@/lib/api/services";
 import { LogEvents } from "@/lib/api/logEvents";
 
@@ -134,7 +136,13 @@ function buildStorageKey(
 /**
  * Manifest schema — matches docs/architecture/image-processing.md spec.
  * Fields: ratio (display format), dimensions (pixels), model, textOverlay,
- * path, thumbnailPath, prompt, generationTimeMs, compositingTimeMs.
+ * path, thumbnailPath, prompt, generationTimeMs, compositingTimeMs, sourceType.
+ *
+ * `sourceType` lets a manifest reviewer grep for reused vs generated
+ * creatives without running a query. The corresponding `model` field
+ * is still "dall-e-3" for every creative — including reused ones — because
+ * the text overlay is always freshly composited by the pipeline, even
+ * when the underlying image came from the asset library.
  */
 interface ManifestCreative {
   ratio: AspectRatio;
@@ -146,6 +154,7 @@ interface ManifestCreative {
   textOverlay: string;
   generationTimeMs: number;
   compositingTimeMs: number;
+  sourceType: CreativeSourceType;
 }
 
 interface ManifestProduct {
@@ -160,6 +169,13 @@ interface Manifest {
   generatedAt: string;
   totalTimeMs: number;
   totalImages: number;
+  /**
+   * Aggregated run summary — distinct products, reused vs generated counts,
+   * failed creatives, status. Derived from `creatives` + `creativeErrors`
+   * via `computeRunSummary()` so the manifest and the API response stay
+   * in lockstep. See `lib/pipeline/runSummary.ts` for the counting rules.
+   */
+  summary: RunSummary;
   products: ManifestProduct[];
   /** Errors tied to specific creative failures (product × ratio) */
   creativeErrors: PipelineError[];
@@ -203,6 +219,7 @@ function buildManifest(
       textOverlay: campaignMessage,
       generationTimeMs: output.generationTimeMs,
       compositingTimeMs: output.compositingTimeMs,
+      sourceType: output.sourceType,
     });
   }
 
@@ -210,12 +227,33 @@ function buildManifest(
     performance.now() - requestContext.startedAtPerfMs
   );
 
+  // Combine creative errors + system errors for the summary's status
+  // classification. A run with zero creatives and a brief.json save error
+  // should still be `failed` — computeRunSummary flips to failed whenever
+  // creatives.length === 0.
+  const allErrorsForSummary: PipelineError[] = [
+    ...creativeErrors,
+    ...systemErrors.map(
+      (sysErr): PipelineError => ({
+        stage: "organizing",
+        cause: "storage_error",
+        message: sysErr.message,
+        retryable: sysErr.retryable,
+      })
+    ),
+  ];
+
   return {
     requestId: requestContext.requestId,
     campaignId,
     generatedAt: new Date().toISOString(),
     totalTimeMs,
     totalImages: creativeOutputs.length,
+    summary: computeRunSummary(
+      creativeOutputs,
+      allErrorsForSummary,
+      totalTimeMs
+    ),
     products: Array.from(productMap.values()),
     creativeErrors,
     systemErrors,
@@ -447,6 +485,7 @@ export async function organizeOutput(
         prompt: creative.prompt,
         generationTimeMs: creative.generationTimeMs,
         compositingTimeMs: creative.compositingTimeMs,
+        sourceType: creative.sourceType,
       };
     })
   );

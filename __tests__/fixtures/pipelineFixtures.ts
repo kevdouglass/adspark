@@ -110,12 +110,22 @@ export const SUCCESS_RESULT: GenerateSuccessResponseBody = deepFreeze({
       prompt: "A premium sun protection product...",
       generationTimeMs: 15_000,
       compositingTimeMs: 500,
+      sourceType: "generated",
     },
   ],
   totalTimeMs: 18_000,
   totalImages: 1,
   errors: [],
   requestId: "abc-123",
+  summary: {
+    totalProducts: 1,
+    totalCreatives: 1,
+    reusedAssets: 0,
+    generatedAssets: 1,
+    failedCreatives: 0,
+    totalTimeMs: 18_000,
+    status: "complete",
+  },
 });
 
 /**
@@ -138,12 +148,22 @@ export const STALE_SUCCESS_RESULT: GenerateSuccessResponseBody = deepFreeze({
       prompt: "A cozy winter skincare product...",
       generationTimeMs: 14_000,
       compositingTimeMs: 600,
+      sourceType: "generated",
     },
   ],
   totalTimeMs: 17_000,
   totalImages: 1,
   errors: [],
   requestId: "def-456",
+  summary: {
+    totalProducts: 1,
+    totalCreatives: 1,
+    reusedAssets: 0,
+    generatedAssets: 1,
+    failedCreatives: 0,
+    totalTimeMs: 17_000,
+    status: "complete",
+  },
 });
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,24 @@ export interface StorageConfig {
   s3Region?: string;
   localOutputDir?: string;
   localUrlBase?: string;
+  /**
+   * Additional read-only directories to consult when a key is not
+   * present under `localOutputDir`. Used to expose committed "seed
+   * assets" (e.g., `./examples/seed-assets/`) to `assetResolver` so
+   * the pipeline can demonstrate the reuse branch on a fresh clone.
+   * Writes always go to `localOutputDir` only.
+   */
+  localSeedDirs?: readonly string[];
 }
+
+/**
+ * Default read-only seed directory. Points at committed demo assets
+ * produced by `scripts/seed-from-output.ts`. Reviewers who clone and
+ * run without DALL-E can still exercise the reuse branch because
+ * `assetResolver.resolveOne()` finds these files via LocalStorage's
+ * seed-dir fallback.
+ */
+const DEFAULT_LOCAL_SEED_DIRS: readonly string[] = ["./examples/seed-assets"];
 
 export function createStorage(config: StorageConfig = readEnvConfig()): StorageProvider {
   if (config.mode === "s3") {
@@ -30,7 +47,8 @@ export function createStorage(config: StorageConfig = readEnvConfig()): StorageP
 
   return new LocalStorage(
     config.localOutputDir ?? "./output",
-    config.localUrlBase ?? "/api/files"
+    config.localUrlBase ?? "/api/files",
+    config.localSeedDirs ?? DEFAULT_LOCAL_SEED_DIRS
   );
 }
 
@@ -48,5 +66,17 @@ function readEnvConfig(): StorageConfig {
     s3Region: process.env.S3_REGION ?? "us-east-1",
     localOutputDir: process.env.LOCAL_OUTPUT_DIR ?? "./output",
     localUrlBase: process.env.LOCAL_URL_BASE ?? "/api/files",
+    // Comma-separated override. An explicit empty string disables all
+    // seed dirs (`LOCAL_SEED_DIRS=`). Unset falls back to the default.
+    localSeedDirs: readSeedDirsFromEnv(),
   };
+}
+
+function readSeedDirsFromEnv(): readonly string[] | undefined {
+  const raw = process.env.LOCAL_SEED_DIRS;
+  if (raw === undefined) return undefined;
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }

@@ -78,6 +78,17 @@ export const LogEvents = {
 
   // ---- Graceful shutdown signal received ----
   ShutdownSignal: "shutdown.signal",
+
+  // ---- Asset upload flow (SPIKE-003 / INVESTIGATION-003) ----
+  // Two-step init + PUT flow. `init` = POST /api/upload returning a
+  // storage key and an upload target URL. `put` = local-mode-only
+  // binary-body write through LocalStorage.save().
+  UploadInitReceived: "upload.init.received",
+  UploadInitComplete: "upload.init.complete",
+  UploadInitFailed: "upload.init.failed",
+  UploadPutReceived: "upload.put.received",
+  UploadPutComplete: "upload.put.complete",
+  UploadPutFailed: "upload.put.failed",
 } as const;
 
 /**

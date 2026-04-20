@@ -18,6 +18,8 @@ import { BriefForm } from "@/components/BriefForm";
 import { PipelineProgress } from "@/components/PipelineProgress";
 import { CreativeGallery } from "@/components/CreativeGallery";
 import { DashboardIdleState } from "@/components/DashboardIdleState";
+import { RunSummaryPanel } from "@/components/RunSummaryPanel";
+import { PipelineTimingChart } from "@/components/PipelineTimingChart";
 
 export default function Home() {
   return (
@@ -59,6 +61,8 @@ export default function Home() {
           <div className="mx-auto flex max-w-5xl flex-col gap-6">
             <DashboardIdleState />
             <PipelineProgress />
+            <RunSummaryPanel />
+            <PipelineTimingChart />
             <CreativeGallery />
           </div>
         </main>

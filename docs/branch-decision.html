@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Branch Decision — feat/interview-prep vs origin/main</title>
+  <meta name="description" content="Decision record: which Git branch to demo from during the Adobe Forward Deployed AI Engineer interview." />
+  <style>
+    /* ---------- Design tokens ---------- */
+    :root {
+      --bg:        #fefefe;
+      --surface:   #f8f7f4;
+      --surface-2: #f1efe9;
+      --ink:       #1a1a1a;
+      --ink-muted: #5a5a5a;
+      --ink-subtle:#8a8a8a;
+      --border:    #e5e4e0;
+      --border-strong: #d0ccc4;
+      --accent:       #E76F51;
+      --accent-dark:  #C04E2F;
+      --accent-bg:    #fdf0ec;
+      --good:      #2A9D8F;
+      --good-bg:   #e8f4f2;
+      --warn:      #E9A23B;
+      --warn-bg:   #fdf6e8;
+      --danger:    #C73E1D;
+      --danger-bg: #fbeae6;
+      --code-bg:   #1e1e1e;
+      --code-ink:  #e8e8e8;
+      --max-width: 760px;
+    }
+
+    /* ---------- Reset & base ---------- */
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 17px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    main {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 3rem 1.5rem 6rem;
+    }
+
+    /* ---------- Typography ---------- */
+    h1, h2, h3, h4 {
+      color: var(--ink);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      line-height: 1.25;
+    }
+    h1 {
+      font-size: 2.15rem;
+      margin: 0 0 0.3rem;
+    }
+    h2 {
+      font-size: 1.45rem;
+      margin: 3.2rem 0 0.9rem;
+      padding-top: 1.4rem;
+      border-top: 1px solid var(--border);
+    }
+    h3 {
+      font-size: 1.15rem;
+      margin: 2rem 0 0.6rem;
+    }
+    h4 {
+      font-size: 1rem;
+      margin: 1.5rem 0 0.4rem;
+      color: var(--ink-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 600;
+    }
+    p { margin: 0 0 1rem; }
+    strong { font-weight: 600; color: var(--ink); }
+    em { font-style: italic; }
+    a {
+      color: var(--accent-dark);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+    a:hover { color: var(--accent); }
+
+    /* ---------- Header ---------- */
+    header.page {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 3rem 1.5rem 0;
+    }
+    .eyebrow {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      margin-bottom: 0.4rem;
+    }
+    .subtitle {
+      font-size: 1.05rem;
+      color: var(--ink-muted);
+      margin: 0.4rem 0 0;
+      max-width: 60ch;
+    }
+    .meta {
+      margin-top: 1.4rem;
+      padding: 0.6rem 1rem;
+      background: var(--surface-2);
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: var(--ink-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem 1.5rem;
+    }
+    .meta span strong {
+      color: var(--ink);
+      margin-right: 0.3rem;
+    }
+
+    /* ---------- TL;DR callout ---------- */
+    .tldr {
+      background: var(--accent-bg);
+      border-left: 4px solid var(--accent);
+      border-radius: 0 6px 6px 0;
+      padding: 1.25rem 1.4rem;
+      margin: 2rem 0;
+    }
+    .tldr h2 {
+      border: none;
+      padding: 0;
+      margin: 0 0 0.5rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent-dark);
+      font-weight: 700;
+    }
+    .tldr p { margin: 0.3rem 0; font-size: 1.02rem; }
+    .tldr strong { color: var(--accent-dark); }
+
+    /* ---------- Cards / callout boxes ---------- */
+    .callout {
+      margin: 1.5rem 0;
+      padding: 1rem 1.2rem;
+      background: var(--surface);
+      border-left: 3px solid var(--border-strong);
+      border-radius: 0 6px 6px 0;
+    }
+    .callout.good {
+      background: var(--good-bg);
+      border-left-color: var(--good);
+    }
+    .callout.warn {
+      background: var(--warn-bg);
+      border-left-color: var(--warn);
+    }
+    .callout.danger {
+      background: var(--danger-bg);
+      border-left-color: var(--danger);
+    }
+    .callout h3 {
+      margin: 0 0 0.3rem;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .callout.good h3  { color: var(--good); }
+    .callout.warn h3  { color: #a87016; }
+    .callout.danger h3 { color: var(--danger); }
+    .callout p:last-child { margin-bottom: 0; }
+
+    /* ---------- Tables ---------- */
+    .table-wrap {
+      overflow-x: auto;
+      margin: 1.4rem 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.93rem;
+    }
+    th, td {
+      padding: 0.7rem 0.9rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th {
+      background: var(--surface);
+      font-weight: 600;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--ink-muted);
+    }
+    tr:last-child td { border-bottom: none; }
+    td.center, th.center { text-align: center; }
+    .yes { color: var(--good); font-weight: 600; }
+    .no  { color: var(--danger); font-weight: 600; }
+    .partial { color: var(--warn); font-weight: 600; }
+
+    /* ---------- Code ---------- */
+    code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.88em;
+      background: var(--surface-2);
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+      color: var(--ink);
+    }
+    pre {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      padding: 1rem 1.2rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      line-height: 1.55;
+      margin: 1.1rem 0;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+    .shell-comment { color: #888; }
+
+    /* ---------- Lists ---------- */
+    ol, ul {
+      padding-left: 1.5rem;
+      margin: 0 0 1rem;
+    }
+    li { margin-bottom: 0.5rem; }
+    ol li::marker { color: var(--accent); font-weight: 600; }
+
+    /* ---------- Reasoning list (numbered with callout) ---------- */
+    .reasoning {
+      counter-reset: step;
+      list-style: none;
+      padding: 0;
+      margin: 1.4rem 0;
+    }
+    .reasoning li {
+      counter-increment: step;
+      position: relative;
+      padding: 0.2rem 0 1.3rem 3rem;
+      min-height: 2rem;
+    }
+    .reasoning li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 2.2rem;
+      height: 2.2rem;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1rem;
+    }
+    .reasoning li strong { color: var(--ink); }
+
+    /* ---------- Quotes ---------- */
+    blockquote {
+      margin: 1.2rem 0;
+      padding: 1rem 1.3rem;
+      background: var(--surface);
+      border-left: 3px solid var(--ink-subtle);
+      border-radius: 0 6px 6px 0;
+      color: var(--ink);
+      font-style: italic;
+    }
+    blockquote p { margin: 0; }
+    blockquote p + p { margin-top: 0.8rem; }
+
+    /* ---------- Footer ---------- */
+    footer {
+      max-width: var(--max-width);
+      margin: 4rem auto 2rem;
+      padding: 1.5rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.82rem;
+      color: var(--ink-subtle);
+      text-align: center;
+    }
+    footer code { font-size: 0.85em; }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 640px) {
+      body { font-size: 16px; }
+      main, header.page { padding-left: 1.1rem; padding-right: 1.1rem; }
+      h1 { font-size: 1.75rem; }
+      h2 { font-size: 1.25rem; }
+      h3 { font-size: 1.05rem; }
+      th, td { padding: 0.55rem 0.6rem; font-size: 0.86rem; }
+      .reasoning li { padding-left: 2.6rem; }
+      .reasoning li::before { width: 1.9rem; height: 1.9rem; font-size: 0.9rem; }
+    }
+
+    /* ---------- Print ---------- */
+    @media print {
+      body { font-size: 11pt; background: #fff; color: #000; }
+      header.page, main, footer { max-width: none; }
+      h2 { page-break-after: avoid; }
+      .tldr, .callout, pre, blockquote { page-break-inside: avoid; }
+      pre { background: #f5f5f5; color: #000; border: 1px solid #ccc; }
+      a { color: #000; text-decoration: underline; }
+    }
+  </style>
+</head>
+<body>
+
+<header class="page">
+  <div class="eyebrow">AdSpark · Interview Prep · Decision Record</div>
+  <h1>Which branch should I demo from?</h1>
+  <p class="subtitle">
+    <code>feat/interview-prep</code> (local only, updated) vs <code>origin/main</code> (submitted state).
+    A structured recommendation with reasoning, framing, and fallback plan for the Adobe FDE interview.
+  </p>
+  <div class="meta">
+    <span><strong>Decision for:</strong> Kevin Douglass</span>
+    <span><strong>Context:</strong> Adobe Forward Deployed AI Engineer interview</span>
+    <span><strong>Drafted:</strong> 2026-04-14</span>
+  </div>
+</header>
+
+<main>
+
+<div class="tldr">
+  <h2>TL;DR</h2>
+  <p>
+    <strong>Demo from <code>feat/interview-prep</code>.</strong>
+    Three references now live on GitHub, each with a distinct purpose:
+    <code>assessment-submission</code> (tag at commit <code>061f274</code>) is the bit-perfect
+    submission, <code>main</code> is that plus a cosmetic overlay-rendering fix pushed this week,
+    and <code>feat/interview-prep</code> is where post-submission feature work lives. Demo from
+    the latter, but know the first two are one checkout away if a reviewer asks.
+  </p>
+</div>
+
+<h2>The question</h2>
+<p>
+  With less than 24 hours to the Adobe interview, which branch should be the primary demo target?
+</p>
+<ul>
+  <li><strong><code>origin/main</code></strong> — the pushed state. Contains the submitted commit plus a cosmetic text-overlay rendering fix pushed earlier this week (gradient band + drop-shadowed glyphs).</li>
+  <li><strong><code>feat/interview-prep</code></strong> — the enhanced branch with five commits on top of main: Block B (visible reuse story), Blocks C+D (sourceType plumbing + RunSummaryPanel + D3 timing chart), SPIKE-003 (manual upload flow, local mode), the interview narrative cheat-sheet, and this decision record.</li>
+  <li><strong><code>assessment-submission</code></strong> — a lightweight annotated tag pointing at the exact bit-perfect submission commit <code>061f274</code> (authored Monday 2026-04-13 00:29 PDT, whose message literally starts with <code>docs(submission):</code>). Lets a strict reviewer check out exactly what you submitted without any post-submission improvements.</li>
+</ul>
+
+<h2>Side-by-side comparison</h2>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Dimension</th>
+        <th><code>origin/main</code></th>
+        <th><code>feat/interview-prep</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Submission of record</strong></td>
+        <td class="yes">✓ This is the evaluated state</td>
+        <td class="no">✗ Post-submission work</td>
+      </tr>
+      <tr>
+        <td><strong>Visible reuse story</strong></td>
+        <td class="no">✗ Dark — no seed assets committed, no badges, no summary panel</td>
+        <td class="yes">✓ Coastal Sun Protection campaign + badges + <code>RunSummaryPanel</code> + timing chart</td>
+      </tr>
+      <tr>
+        <td><strong>Prompt builder walkthrough</strong></td>
+        <td class="yes">✓ Works identically (file unchanged)</td>
+        <td class="yes">✓ Works identically (file unchanged)</td>
+      </tr>
+      <tr>
+        <td><strong>Architecture story</strong></td>
+        <td class="yes">✓ Unchanged</td>
+        <td class="yes">✓ Unchanged + extra surface (upload flow, sourceType plumbing)</td>
+      </tr>
+      <tr>
+        <td><strong>Manual upload UI</strong></td>
+        <td class="no">✗ Hidden input only</td>
+        <td class="yes">✓ Real file picker, two-step flow, 16 tests, SPIKE-003 + INVESTIGATION-003 docs</td>
+      </tr>
+      <tr>
+        <td><strong>Test count</strong></td>
+        <td>~250</td>
+        <td><strong>282</strong> (+32)</td>
+      </tr>
+      <tr>
+        <td><strong>Overlay fix (gradient band + shadow)</strong></td>
+        <td class="yes">✓ Pushed earlier today</td>
+        <td class="yes">✓ Merged from <code>main</code></td>
+      </tr>
+      <tr>
+        <td><strong>Interview narrative cheat-sheet</strong></td>
+        <td class="no">✗ Not present</td>
+        <td class="yes">✓ <code>docs/interview-narrative.md</code> committed</td>
+      </tr>
+      <tr>
+        <td><strong>Risk of unfamiliar code surface</strong></td>
+        <td class="yes">Low — you've had weeks with it</td>
+        <td class="partial">Medium — most built today, rehearse before demoing</td>
+      </tr>
+      <tr>
+        <td><strong>Disk-failure / data-loss risk</strong></td>
+        <td class="yes">Zero (pushed to GitHub)</td>
+        <td class="no">High (local only — one bad drive and it's gone)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>Recommendation</h2>
+<p>
+  <strong>Primary demo target: <code>feat/interview-prep</code>.</strong>
+  The reasoning breaks down into five concrete arguments. None of them are "because it has more features" — that's not a good reason on its own. Each is tied to a specific interview failure mode on <code>main</code>.
+</p>
+
+<ol class="reasoning">
+  <li>
+    <strong>The reuse story is the single strongest demo beat in your whole assessment, and it is dark on <code>main</code>.</strong>
+    The assignment text explicitly says <em>"reuse input assets when available"</em>. On <code>main</code>, the reuse branch fires <strong>zero times</strong> on a fresh clone because nothing has an <code>existingAsset</code> pointing at a real file. You would be making the claim verbally with no visual proof. On <code>feat/interview-prep</code>, a reviewer watches the pipeline skip DALL-E for 3 of 6 creatives in real time and sees three independent visual signals: the emerald <strong>Reused</strong> badge on each card, the <code>RunSummaryPanel</code>'s <code>Reused: 3 / Generated: 3</code> count, and the <code>PipelineTimingChart</code> where reused creatives collapse to a compositing-only sliver. A reviewer cannot misinterpret this.
+  </li>
+  <li>
+    <strong>The upload UI pre-empts an obvious objection.</strong>
+    A reviewer skimming <code>main</code> will notice <em>"the assignment says 'assets uploaded manually' but the form has no file picker"</em>. On <code>feat/interview-prep</code> the file picker is there, the two-step init + PUT flow works, magic-byte validation defeats Content-Type spoofing, and you have a SPIKE doc explaining the architectural decisions. If they ask <em>"how would you wire manual upload?"</em> — your answer is <em>"here's the commit"</em>, not <em>"here's how I would approach it."</em>
+  </li>
+  <li>
+    <strong>Everything on <code>feat/interview-prep</code> is strictly additive.</strong>
+    No feature was removed, no API was broken, no existing test was deleted. The prompt builder walkthrough, the clean architecture story, the ADR-006 mappers demo — all identical. You gain visual and narrative surface without losing anything. There is no "risk" to the familiar parts of the story.
+  </li>
+  <li>
+    <strong>The interview narrative cheat-sheet is organized around the <code>feat/interview-prep</code> feature set.</strong>
+    <code>docs/interview-narrative.md</code> references the <code>RunSummaryPanel</code>, the D3 chart, the <code>coastal-sun-protection</code> campaign, the upload UI, and SPIKE-003. If you demo from <code>main</code>, roughly half the cheat-sheet does not apply and you would need to improvise the narrative at the worst possible time.
+  </li>
+  <li>
+    <strong>"I kept working after submission" is a positive signal, not a negative one.</strong>
+    The 48-hour assessment clock was the deadline for the submission. It was not a ban on continued development. A senior engineer who shipped on Sunday and continued iterating through Tuesday is demonstrating exactly the continuous-improvement mindset Adobe says they value. <strong>Do not apologize for this work.</strong> Frame it as deliberate post-MVP iteration.
+  </li>
+</ol>
+
+<h2>Push to origin tonight as a backup (separate from the demo decision)</h2>
+<p>
+  Right now <code>feat/interview-prep</code> is local only. If your laptop dies at 3am, the bootloader corrupts, someone else uses the machine, or you <code>git reset --hard</code> by accident, <strong>it's gone</strong>. That's 8+ hours of work at risk.
+</p>
+<pre><code>git push -u origin feat/interview-prep</code></pre>
+<p>
+  This <strong>does not affect <code>main</code></strong>. It creates a new remote branch <code>origin/feat/interview-prep</code> that is visible in the GitHub branch list but does not touch what Adobe cloned. Your interview-prep work is now backed up to a second machine (GitHub's) for zero additional risk.
+</p>
+
+<h2>The third reference: <code>assessment-submission</code> tag</h2>
+<p>
+  Between writing this decision record and finalizing it, one more piece of
+  the story fell into place. The <code>main</code> branch has the
+  submission commit plus a cosmetic text-overlay fix pushed this week —
+  which is 99.9% of the submitted state but not byte-perfect. A strict
+  reviewer who asks <em>"show me exactly what you submitted"</em> and then
+  runs <code>git log</code> could notice the two extra commits and ask
+  about them. The honest answer is fine ("one cosmetic overlay fix, no
+  behavior change") but the conversation is cleaner if you have a
+  permanent reference to the exact submission commit.
+</p>
+<pre><code>git tag -a assessment-submission 061f274 -m "Exact state at Adobe FDE assessment submission — Loom walkthrough + demo scripts landed"
+git push origin assessment-submission</code></pre>
+<p>
+  Now there are <strong>three distinct references</strong>, each with a
+  crisp single-purpose description:
+</p>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Reference</th>
+        <th>What it is</th>
+        <th>Use when reviewer asks…</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>assessment-submission</code> <span class="partial">(tag)</span></td>
+        <td>Exact <code>061f274</code> commit — bit-perfect submission</td>
+        <td><em>"show me the pristine submission"</em></td>
+      </tr>
+      <tr>
+        <td><code>main</code> <span class="partial">(branch)</span></td>
+        <td>Submission + overlay rendering fix</td>
+        <td><em>"show me current main"</em></td>
+      </tr>
+      <tr>
+        <td><code>feat/interview-prep</code> <span class="yes">(branch — demo target)</span></td>
+        <td>Submission + overlay + Blocks B/C/D + SPIKE-003 + docs</td>
+        <td><em>"show me your best version"</em> (default)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p>
+  The tag also <strong>proactively frames the 9-hour overtime window</strong>
+  between the stated 15:44 PDT deadline and the <code>docs(submission):</code>
+  commit at Monday 00:29 PDT. If asked: <em>"I kept polishing after the
+  stated deadline — mostly infrastructure hardening, the Docker container,
+  SPIKE-002, and the Loom walkthrough link. The commit I labeled
+  <code>docs(submission):</code> is where I declared done. The tag makes
+  that declaration permanent and verifiable."</em>
+</p>
+
+<h2>Framing to use on the call</h2>
+<p>
+  Pick whichever flavor fits the conversation flow. The first one leads with the branch choice confidently; the second is what to say if a reviewer asks about it mid-call.
+</p>
+
+<h3>Opener — lead with it (confident, proactive)</h3>
+<blockquote>
+  <p>
+    "Three references on GitHub that matter for this walkthrough. There's a tag called <code>assessment-submission</code> pointing at commit <code>061f274</code> — that's the exact bit-perfect state I submitted, complete with the Loom walkthrough link and the demo scripts. <code>main</code> is that plus a cosmetic text-overlay rendering fix I pushed this week — the campaign-message band now gradients instead of flat-fills, and the glyphs have a subtle drop shadow. And <code>feat/interview-prep</code> is where I've been building post-submission feature work: the visible reuse story, the run summary panel, the D3 timing chart, the manual upload UI, plus a SPIKE doc and an INVESTIGATION for the upload work. I'm going to demo from <code>feat/interview-prep</code> because the visible reuse story is the strongest beat, but I can switch to any of the three — they're all the same underlying pipeline."
+  </p>
+</blockquote>
+<p>
+  That's about 45 seconds of talking. Practice it once or twice. It frames the branch choice as deliberate engineering judgment, not as hiding something.
+</p>
+
+<h3>If they ask later — defensive but honest</h3>
+<blockquote>
+  <p>
+    "Everything you're seeing is on a feature branch I opened after submitting — I didn't want to ship with an incomplete reuse demo so I kept building. <code>main</code> on GitHub is the submitted state; this branch is post-submission polish. Happy to switch to main if that's more useful to you."
+  </p>
+</blockquote>
+
+<h2>Two risks and their mitigations</h2>
+
+<div class="callout warn">
+  <h3>Risk 1 — A strict reviewer says "I want to see exactly what you submitted"</h3>
+  <p>
+    <strong>Likelihood:</strong> low-to-moderate. Senior interviewers generally appreciate continued iteration; junior-focused or process-heavy reviewers may not.
+  </p>
+  <p>
+    <strong>Mitigation:</strong> have <code>main</code> ready in a <strong>second git worktree</strong> running on a different port before the call starts. If they ask, switch to the second browser tab — zero dead air. Do not <code>git checkout</code> branches mid-demo; it stops your dev server and creates awkward silence. Start both simultaneously:
+  </p>
+  <pre><code><span class="shell-comment"># Terminal 1 — feat/interview-prep on port 3000 (primary)</span>
+cd C:\dev\AI\Projects\Take-Home-Assessments\AdSpark
+npm run dev
+
+<span class="shell-comment"># Terminal 2 — main on port 3001 (fallback)</span>
+git worktree add ../AdSpark-main main
+cd ../AdSpark-main
+npm run dev -- --port 3001</code></pre>
+  <p>
+    Both are live. Two browser tabs. If the reviewer asks for main, flip tabs.
+  </p>
+</div>
+
+<div class="callout warn">
+  <h3>Risk 2 — Something built today regresses during the live demo</h3>
+  <p>
+    <strong>Likelihood:</strong> low. Gate is green, 282 tests pass, upload flow has been smoke-tested end-to-end in both local and S3 modes.
+  </p>
+  <p>
+    <strong>Mitigation:</strong> run Block F — a full live dry-run BEFORE the interview. Walk the exact click path from §1 of <code>docs/interview-narrative.md</code> at least once. If anything surprises you, catch it now, not tomorrow.
+  </p>
+</div>
+
+<h2>The bottom line</h2>
+
+<div class="callout good">
+  <h3>Action items tonight</h3>
+  <p>
+    <strong>1. ✅ Done.</strong> <code>feat/interview-prep</code> pushed to <code>origin</code> as backup. 8+ hours of work now replicated to GitHub, zero disk-loss risk.
+  </p>
+  <p>
+    <strong>2. ✅ Done.</strong> <code>assessment-submission</code> tag created at commit <code>061f274</code> and pushed to origin. Strict reviewers can now check out the exact bit-perfect submission if asked.
+  </p>
+  <p>
+    <strong>3.</strong> Read <code>docs/interview-narrative.md</code> end-to-end once (~15 minutes). Absorb the structure, memorize §0 opening beats and §10 "three numbers to remember cold." The updated §0.1 section has the three-reference framing as its own scripted opener.
+  </p>
+  <p>
+    <strong>4.</strong> Run the demo click path live at least once (Block F dry run). Use <code>coastal-sun-protection</code> as the primary sample brief — one product reuses a committed seed asset, the other goes through DALL-E, both branches fire in a single run and the reuse story becomes visible through the badge, the summary panel, and the timing chart.
+  </p>
+  <p>
+    <strong>5.</strong> Sleep. The hard work is already done. Your only job tomorrow is to explain what's already in front of you, honestly, without overselling or underselling.
+  </p>
+</div>
+
+<p>
+  <strong>Demo from <code>feat/interview-prep</code>. Keep <code>main</code> as a one-tab-away fallback. Open the call by framing the branch choice in your first 45 seconds. You have a strong story either way, but the visible reuse demo on <code>feat/interview-prep</code> is the single highest-leverage beat in your whole pitch — and you built it specifically to answer the question the assignment asked.</strong>
+</p>
+
+<h2>Related documents</h2>
+<ul>
+  <li><code>docs/interview-narrative.md</code> — the full walkthrough cheat-sheet</li>
+  <li><code>docs/spikes/SPIKE-003-asset-upload-flow.md</code> — the upload flow design record</li>
+  <li><code>docs/investigations/INVESTIGATION-003-upload-route-two-step-flow.md</code> — tactical implementation plan + file-by-file audit</li>
+  <li><code>docs/investigations/INVESTIGATION-001-vercel-s3-signature-mismatch.md</code> — prior S3 credential-rotation runbook (referenced during today's key rotation)</li>
+  <li><code>docs/adr/</code> — the 8 architecture decision records (ADR-001 through ADR-008)</li>
+</ul>
+
+</main>
+
+<footer>
+  <p>
+    Decision record committed to the AdSpark repo at <code>docs/branch-decision.html</code>.
+    Open directly in any browser. No external dependencies. Prints cleanly.
+  </p>
+</footer>
+
+</body>
+</html>

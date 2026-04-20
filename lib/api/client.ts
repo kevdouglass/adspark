@@ -51,6 +51,8 @@
 import type {
   GenerateRequestBody,
   GenerateSuccessResponseBody,
+  UploadInitRequestBody,
+  UploadInitResponseBody,
 } from "./types";
 import { CLIENT_REQUEST_TIMEOUT_MS } from "./timeouts";
 import { KNOWN_API_ERROR_CODES, type ApiError } from "./errors";
@@ -425,3 +427,129 @@ export async function generateCreatives(
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _generateFnConformanceCheck: GenerateFn = generateCreatives;
+
+// ---------------------------------------------------------------------------
+// Upload client — two-step init + PUT (SPIKE-003 / INVESTIGATION-003)
+// ---------------------------------------------------------------------------
+
+/**
+ * The result the caller gets back from a successful `uploadAsset`. The
+ * `key` field is the ONE THING the caller should save into the brief's
+ * `product.existingAsset` field. Signed URLs (which the key is derived
+ * from) expire; keys don't. See INVESTIGATION-003 §Risk register.
+ */
+export interface UploadAssetResult {
+  key: string;
+  bytes: number;
+}
+
+/**
+ * Mirror of `UploadInitRequestBody.contentType` for client-side type
+ * narrowing in the guard below. Kept local rather than re-exported from
+ * `./types` because the client module already owns the HTTP boundary.
+ */
+const ALLOWED_UPLOAD_MIME_RE = /^image\/(png|webp|jpeg)$/;
+
+/** Local copy of the route's 10 MB cap. Duplicated intentionally: the
+ * route is the authority, but client-side validation lets us fail fast
+ * BEFORE the round-trip so users get a useful error without waiting.
+ * If the server cap ever diverges, the server is still the final word. */
+const CLIENT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Upload an image via the two-step init + PUT flow.
+ *
+ * 1. POST `/api/upload` with `{filename, contentType, campaignId}` — the
+ *    server builds a safe storage key and returns an `uploadUrl` (local:
+ *    our own `?key=...` route; S3: pre-signed PUT URL).
+ * 2. PUT the file body to `uploadUrl` with the returned `headers`. In
+ *    local mode the body hits our PUT handler; in S3 mode the body
+ *    goes directly to S3 via the pre-signed URL, bypassing our function.
+ * 3. Return the storage `key`. The caller saves this to
+ *    `product.existingAsset` and submits the brief — the pipeline's
+ *    `assetResolver` will find the uploaded file on `storage.exists(key)`.
+ *
+ * Throws on any failure. The caller (typically a React component) wraps
+ * this in a try/catch for error display. Using throws here rather than a
+ * Result union is intentional: upload is a one-shot mutation and the UI
+ * just wants to know "did it work or not." `generateCreatives` returns
+ * a Result because it feeds into the `usePipelineState` reducer; upload
+ * is a simpler surface and a throw keeps the call site short.
+ */
+export async function uploadAsset(
+  file: File,
+  options: { campaignId?: string; signal?: AbortSignal } = {}
+): Promise<UploadAssetResult> {
+  // --- client-side guards: fail fast before the network round trip ---
+  if (!ALLOWED_UPLOAD_MIME_RE.test(file.type)) {
+    throw new Error(
+      `Unsupported file type: ${file.type || "(missing)"}. Expected image/png, image/jpeg, or image/webp.`
+    );
+  }
+  if (file.size === 0) {
+    throw new Error("File is empty.");
+  }
+  if (file.size > CLIENT_MAX_UPLOAD_BYTES) {
+    throw new Error(
+      `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — the upload limit is ${CLIENT_MAX_UPLOAD_BYTES / 1024 / 1024} MB.`
+    );
+  }
+
+  // --- Step 1: POST /api/upload (init) ---
+  const initBody: UploadInitRequestBody = {
+    filename: file.name,
+    contentType: file.type as UploadInitRequestBody["contentType"],
+    campaignId: options.campaignId,
+  };
+  const initResult = await postJson<UploadInitResponseBody>(
+    "/api/upload",
+    initBody,
+    { signal: options.signal }
+  );
+  if (!initResult.ok) {
+    // Forward the server's error message verbatim — `postJson` has
+    // already hardened the ApiError envelope and stripped any leaky
+    // internals via `isApiErrorShape`.
+    throw new Error(initResult.error.message);
+  }
+
+  // --- Step 2: PUT the bytes ---
+  // The browser sends the raw File as the body. Content-Type is
+  // whatever the init handler told us to use (matches what we declared
+  // above, so the magic-byte check on the server side will pass unless
+  // the File object's `.type` is a lie — in which case server rejects
+  // it and we surface a clean error).
+  let putResponse: Response;
+  try {
+    putResponse = await fetch(initResult.data.uploadUrl, {
+      method: initResult.data.method,
+      headers: initResult.data.headers,
+      body: file,
+      signal: options.signal,
+    });
+  } catch (caught) {
+    if (caught instanceof DOMException && caught.name === "AbortError") {
+      throw new Error("Upload was cancelled.");
+    }
+    throw new Error(
+      "Could not reach the upload endpoint. Please check your connection and try again."
+    );
+  }
+
+  if (!putResponse.ok) {
+    // Try to parse the server's ApiError body for a useful message.
+    // Fall back to a generic message if the body is missing or garbage.
+    let serverMessage = `Upload failed with status ${putResponse.status}.`;
+    try {
+      const errBody = await putResponse.json();
+      if (errBody && typeof errBody.message === "string") {
+        serverMessage = errBody.message;
+      }
+    } catch {
+      // ignore — the fallback message is already set
+    }
+    throw new Error(serverMessage);
+  }
+
+  return { key: initResult.data.key, bytes: file.size };
+}

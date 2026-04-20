@@ -25,6 +25,12 @@ export interface ExampleSeed {
 
 export const EXAMPLE_SEEDS: readonly ExampleSeed[] = [
   {
+    slug: "coastal-sun-protection",
+    campaignId: "coastal-sun-protection-summer-2026",
+    campaignName: "Coastal Sun Protection — Summer 2026",
+    prompt: "We're running a summer 2026 sun-protection launch for Coastal Wellness Co. Two products: the SPF 50 Mineral Sunscreen — reef-safe, zinc-oxide, water-resistant 80 minutes, broad spectrum — and the After-Sun Cooling Aloe Gel, which is organic aloe vera with vitamin E and cucumber extract. The campaign message is \"Stay Protected All Summer\". Target is North American health-conscious adults 25 to 45, outdoor and beach lifestyle. Tone should be warm, coastal, trustworthy, premium but approachable. I need all three aspect ratios — 1:1, 9:16, and 16:9.",
+  },
+  {
     slug: "fall-coffee-launch",
     campaignId: "ember-roast-fall-launch",
     campaignName: "Ember Roast — Fall Single-Origin Launch",
